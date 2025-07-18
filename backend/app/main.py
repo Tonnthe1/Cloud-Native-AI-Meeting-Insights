@@ -1,8 +1,12 @@
-from fastapi import FastAPI, File, UploadFile
+from fastapi import FastAPI, File, UploadFile, Query
 from fastapi.responses import JSONResponse
+from app.models import Meeting
+from app.db import SessionLocal, engine, Base
 from dotenv import load_dotenv
 import os
 import openai
+
+Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="AI Meeting Insights")
 
@@ -78,8 +82,17 @@ async def analyze_meeting(file: UploadFile = File(...)):
             response_format="text"
         )
     summary = summarize_meeting_transcript(transcript)
+
+    db = SessionLocal()
+    meeting = Meeting(filename=file.filename, transcript=transcript, summary=summary)
+    db.add(meeting)
+    db.commit()
+    db.refresh(meeting)
+    db.close()
+    
     return {
-        "filename": file_location,
+        "id": meeting.id,
         "transcript": transcript,
-        "summary": summary
+        "summary": summary,
+        "filename": file.filename
     }
