@@ -1,20 +1,46 @@
-from fastapi import FastAPI, File, UploadFile, Query
+from fastapi import FastAPI, File, UploadFile, HTTPException, Depends, status, Request
 from fastapi.responses import JSONResponse
-from app.models import Meeting
+from sqlalchemy.orm import Session
 from app.db import SessionLocal, engine, Base
+from typing import List
 from dotenv import load_dotenv
+from app.models import Meeting
+from app.schemas import MeetingOut
 import os
 import openai
 
-Base.metadata.create_all(bind=engine)
+load_dotenv()
+user = os.getenv("POSTGRES_USER")
+password = os.getenv("POSTGRES_PASSWORD")
+host = os.getenv("POSTGRES_HOST", "localhost")
+port = os.getenv("POSTGRES_PORT", "5432")
+db = os.getenv("POSTGRES_DB")
+DATABASE_URL = f"postgresql://{user}:{password}@{host}:{port}/{db}"
 
 app = FastAPI(title="AI Meeting Insights")
 
-load_dotenv()
+Base.metadata.create_all(bind=engine)
+
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
 UPLOAD_DIR = "app/uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+def verify_api_key(request: Request):
+    api_key = os.getenv("API_KEY")
+    header_key = request.headers.get("x-api-key")
+    if header_key != api_key:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API Key")
+
+def api_key_dependency(request: Request = Depends()):
+    return verify_api_key(request)
 
 @app.get("/health")
 def health_check():
@@ -25,14 +51,14 @@ def read_root():
     return {"message": "Welcome to AI Meeting Insights"}
 
 @app.post("/upload-audio")
-async def upload_audio(file: UploadFile = File(...)):
+async def upload_audio(file: UploadFile = File(...), _: None = Depends(api_key_dependency)):
     file_location = f"{UPLOAD_DIR}/{file.filename}"
     with open(file_location, "wb") as f:
         f.write(await file.read())
     return JSONResponse(content={"filename": file_location, "msg": "Upload successful"})
 
 @app.post("/transcribe-audio")
-async def transcribe_audio(file: UploadFile = File(...)):
+async def transcribe_audio(file: UploadFile = File(...), _: None = Depends(api_key_dependency)):
     file_location = f"{UPLOAD_DIR}/{file.filename}"
     with open(file_location, "wb") as f:
         f.write(await file.read())
@@ -66,12 +92,12 @@ def summarize_meeting_transcript(transcript: str) -> str:
     return completion.choices[0].message.content or ""
 
 @app.post("/summarize")
-async def summarize_transcript(transcript: str):
+async def summarize_transcript(transcript: str, _: None = Depends(api_key_dependency)):
     summary = summarize_meeting_transcript(transcript)
     return {"summary": summary}
 
 @app.post("/analyze-meeting")
-async def analyze_meeting(file: UploadFile = File(...)):
+async def analyze_meeting(file: UploadFile = File(...), _: None = Depends(api_key_dependency)):
     file_location = f"{UPLOAD_DIR}/{file.filename}"
     with open(file_location, "wb") as f:
         f.write(await file.read())
@@ -96,3 +122,15 @@ async def analyze_meeting(file: UploadFile = File(...)):
         "summary": summary,
         "filename": file.filename
     }
+
+@app.get("/meetings", response_model=List[MeetingOut])
+def list_meetings(db: Session = Depends(get_db), _: None = Depends(api_key_dependency)):
+    meetings = db.query(Meeting).order_by(Meeting.created_at.desc()).all()
+    return meetings
+
+@app.get("/meetings/{meeting_id}", response_model=MeetingOut)
+def get_meeting(meeting_id: int, db: Session = Depends(get_db), _: None = Depends(api_key_dependency)):
+    meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
+    if not meeting:
+        raise HTTPException(status_code=404, detail="Meeting not found")
+    return meeting
