@@ -1,4 +1,5 @@
 from fastapi import FastAPI, File, UploadFile, HTTPException, Depends, status, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 from app.db import SessionLocal, engine, Base
@@ -18,6 +19,14 @@ db = os.getenv("POSTGRES_DB")
 DATABASE_URL = f"postgresql://{user}:{password}@{host}:{port}/{db}"
 
 app = FastAPI(title="AI Meeting Insights")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 Base.metadata.create_all(bind=engine)
 
@@ -39,8 +48,22 @@ def verify_api_key(request: Request):
     if header_key != api_key:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API Key")
 
-def api_key_dependency(request: Request = Depends()):
+def api_key_dependency(request: Request):
     return verify_api_key(request)
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request, exc):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail}
+    )
+
+@app.exception_handler(Exception)
+async def generic_exception_handler(request, exc):
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal Server Error"}
+    )
 
 @app.get("/health")
 def health_check():
@@ -134,3 +157,4 @@ def get_meeting(meeting_id: int, db: Session = Depends(get_db), _: None = Depend
     if not meeting:
         raise HTTPException(status_code=404, detail="Meeting not found")
     return meeting
+
