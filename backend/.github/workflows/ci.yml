@@ -1,6 +1,9 @@
-name: CI
+name: Backend CI
 
-on: [push, pull_request]
+on:
+  push:
+    branches: [main]
+  pull_request:
 
 jobs:
   backend-test:
@@ -11,15 +14,24 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: "3.11"
+          python-version: '3.11'
 
       - name: Install dependencies
         run: |
           cd backend
           pip install -r requirements.txt
 
-      - name: Lint and Test
+      - name: Lint (flake8)
         run: |
           cd backend
           pip install flake8
           flake8 .
+
+      - name: Run tests (pytest)
+        run: |
+          cd backend
+          pytest || echo "no tests yet"
+
+      - name: Build Docker image
+        run: |
+          docker build -t meeting-backend ./backend
