@@ -22,4 +22,5 @@ sqlalchemy==2.0.30
 psycopg2-binary==2.9.9
 asyncpg==0.29.0
 openai==1.65.0
-
+faster-whisper>=1.0.0
+pydub==0.25.1

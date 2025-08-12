@@ -7,8 +7,15 @@ from typing import List
 from dotenv import load_dotenv
 from app.models import Meeting
 from app.schemas import MeetingOut
+from datetime import datetime, timezone
+from contextlib import asynccontextmanager
+from pathlib import Path
+import shutil
 import os
+import subprocess
+import uuid
 import openai
+from faster_whisper import WhisperModel
 
 load_dotenv()
 user = os.getenv("POSTGRES_USER")
@@ -18,7 +25,14 @@ port = os.getenv("POSTGRES_PORT", "5432")
 db = os.getenv("POSTGRES_DB")
 DATABASE_URL = f"postgresql://{user}:{password}@{host}:{port}/{db}"
 
-app = FastAPI(title="AI Meeting Insights")
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    global _fw_model
+    _fw_model = WhisperModel(FW_MODEL, device="cpu", compute_type=FW_COMPUTE_TYPE)
+    yield
+    _fw_model = None
+
+app = FastAPI(title="AI Meeting Insights", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -32,8 +46,12 @@ Base.metadata.create_all(bind=engine)
 
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
-UPLOAD_DIR = "app/uploads"
-os.makedirs(UPLOAD_DIR, exist_ok=True)
+UPLOAD_DIR = Path(os.getenv("UPLOAD_DIR", "app/uploads"))
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
+FW_MODEL = os.getenv("FW_MODEL", "base.en")
+FW_COMPUTE_TYPE = os.getenv("FW_COMPUTE_TYPE", "float32")
+_fw_model: WhisperModel | None = None
 
 def get_db():
     db = SessionLocal()
@@ -67,34 +85,68 @@ async def generic_exception_handler(request, exc):
 
 @app.get("/health")
 def health_check():
-    return {"status": "ok"}
+    return {"status": "ok", "model": FW_MODEL}
 
 @app.get("/")
 def read_root():
     return {"message": "Welcome to AI Meeting Insights"}
 
+def _save_upload(file: UploadFile) -> Path:
+    """
+    Save incoming UploadFile to UPLOAD_DIR with a safe filename.
+    """
+    safe_name = os.path.basename(file.filename or f"{uuid.uuid4().hex}.m4a")
+    dst = UPLOAD_DIR / safe_name
+    with dst.open("wb") as f:
+        shutil.copyfileobj(file.file, f)
+    return dst
+
+def _to_wav_16k_mono(src: Path) -> Path:
+    """
+    Convert any audio to 16k mono WAV for stable transcription via ffmpeg.
+    """
+    wav = src.with_suffix(".wav")
+    cmd = ["ffmpeg", "-y", "-i", str(src), "-ar", "16000", "-ac", "1", str(wav)]
+    subprocess.run(cmd, check=True, capture_output=True)
+    return wav
+
+def transcribe_with_faster_whisper(src_path: Path) -> str:
+    """
+    Transcribe with faster-whisper using the globally loaded model.
+    """
+    if _fw_model is None:
+        raise RuntimeError("faster-whisper model not loaded")
+
+    # Convert to WAV to sidestep container/codec quirks
+    wav = _to_wav_16k_mono(src_path)
+
+    segments, info = _fw_model.transcribe(
+        str(wav),
+        beam_size=5,
+        vad_filter=True,
+        # language="en",  # comment out to auto-detect multi-language
+    )
+    parts = [seg.text for seg in segments]
+    return " ".join(parts).strip()
+
 @app.post("/upload-audio")
 async def upload_audio(file: UploadFile = File(...), _: None = Depends(api_key_dependency)):
-    file_location = f"{UPLOAD_DIR}/{file.filename}"
-    with open(file_location, "wb") as f:
-        f.write(await file.read())
-    return JSONResponse(content={"filename": file_location, "msg": "Upload successful"})
+    dst = _save_upload(file)
+    return JSONResponse(content={"filename": str(dst), "msg": "Upload successful"})
 
 @app.post("/transcribe-audio")
 async def transcribe_audio(file: UploadFile = File(...), _: None = Depends(api_key_dependency)):
-    file_location = f"{UPLOAD_DIR}/{file.filename}"
-    with open(file_location, "wb") as f:
-        f.write(await file.read())
-    with open(file_location, "rb") as audio_file:
-        transcript = openai.audio.transcriptions.create(
-            model="whisper-1",
-            file=audio_file,
-            response_format="text"
-        )
-    return JSONResponse(content={
-        "filename": file_location,
-        "transcript": transcript
-    })
+    try:
+        dst = _save_upload(file)
+        transcript = transcribe_with_faster_whisper(dst)
+        return JSONResponse(content={
+            "filename": str(dst),
+            "transcript": transcript
+        })
+    except subprocess.CalledProcessError as e:
+        raise HTTPException(status_code=500, detail=e.stderr.decode("utf-8", "ignore"))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 def summarize_meeting_transcript(transcript: str) -> str:
     prompt = (
@@ -104,7 +156,7 @@ def summarize_meeting_transcript(transcript: str) -> str:
         + transcript
     )
     completion = openai.chat.completions.create(
-        model="gpt-3.5-turbo", 
+        model="gpt-3.5-turbo",
         messages=[
             {"role": "system", "content": "You are a meeting assistant."},
             {"role": "user", "content": prompt}
@@ -120,31 +172,32 @@ async def summarize_transcript(transcript: str, _: None = Depends(api_key_depend
     return {"summary": summary}
 
 @app.post("/analyze-meeting")
-async def analyze_meeting(file: UploadFile = File(...), _: None = Depends(api_key_dependency)):
-    file_location = f"{UPLOAD_DIR}/{file.filename}"
-    with open(file_location, "wb") as f:
-        f.write(await file.read())
-    with open(file_location, "rb") as audio_file:
-        transcript = openai.audio.transcriptions.create(
-            model="whisper-1",
-            file=audio_file,
-            response_format="text"
-        )
+def analyze_meeting(file: UploadFile = File(...), ok=Depends(verify_api_key)):
+    try:
+        dst = _save_upload(file)
+        transcript = transcribe_with_faster_whisper(dst)
+    except subprocess.CalledProcessError as e:
+        raise HTTPException(status_code=500, detail=e.stderr.decode("utf-8", "ignore"))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Transcription failed: {e}")
+
     summary = summarize_meeting_transcript(transcript)
 
     db = SessionLocal()
-    meeting = Meeting(filename=file.filename, transcript=transcript, summary=summary)
-    db.add(meeting)
-    db.commit()
-    db.refresh(meeting)
-    db.close()
-    
-    return {
-        "id": meeting.id,
-        "transcript": transcript,
-        "summary": summary,
-        "filename": file.filename
-    }
+    try:
+        m = Meeting(
+            filename=os.path.basename(file.filename),
+            transcript=transcript,
+            summary=summary,
+            created_at=datetime.now(timezone.utc),
+        )
+        db.add(m)
+        db.commit()
+        db.refresh(m)
+    finally:
+        db.close()
+
+    return {"id": m.id, "filename": m.filename, "summary": m.summary}
 
 @app.get("/meetings", response_model=List[MeetingOut])
 def list_meetings(db: Session = Depends(get_db), _: None = Depends(api_key_dependency)):
@@ -157,4 +210,3 @@ def get_meeting(meeting_id: int, db: Session = Depends(get_db), _: None = Depend
     if not meeting:
         raise HTTPException(status_code=404, detail="Meeting not found")
     return meeting
-

@@ -1,54 +1,58 @@
-'use client'
+"use client";
 
-import { useEffect, useState } from "react";
-import axios from "axios";
+import React, { useEffect, useState } from "react";
+import api from "@/lib/api";
 
 type Meeting = {
   id: number;
   filename: string;
+  transcript?: string | null;
+  summary?: string | null;
   created_at: string;
-  summary: string;
 };
 
 export default function MeetingsPage() {
-  const [meetings, setMeetings] = useState<Meeting[]>([]);
+  const [items, setItems] = useState<Meeting[]>([]);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
+  const [err, setErr] = useState<string | null>(null);
 
-  useEffect(() => {
-    async function fetchMeetings() {
+  async function fetchMeetings() {
+    try {
       setLoading(true);
-      setError("");
-      try {
-        const res = await axios.get("http://localhost:8000/meetings", {
-          headers: {
-            "x-api-key": process.env.NEXT_PUBLIC_API_KEY
-          }
-        });
-        setMeetings(res.data);
-      } catch (err: any) {
-        setError(err?.response?.data?.detail || err.message || "Unknown error");
-      }
+      setErr(null);
+      const res = await api.get<Meeting[]>("/meetings");
+      setItems(res.data);
+    } catch (e: any) {
+      setErr(e?.response?.data?.detail || e.message || "Failed to fetch");
+    } finally {
       setLoading(false);
     }
+  }
+
+  useEffect(() => {
     fetchMeetings();
   }, []);
 
   return (
-    <div className="max-w-2xl mx-auto p-8">
-      <h1 className="text-2xl font-bold mb-4">Meeting History</h1>
-      {loading && <div>Loading...</div>}
-      {error && <div className="text-red-500">{error}</div>}
-      <ul className="space-y-4">
-        {meetings.map(m => (
-          <li key={m.id} className="border p-4 rounded shadow">
-            <div className="font-semibold">File: {m.filename}</div>
-            <div>Created At: {new Date(m.created_at).toLocaleString()}</div>
-            <div className="text-gray-600 line-clamp-2">Summary: {m.summary}</div>
-            {/* Button to view details */}
+    <main style={{ maxWidth: 900, margin: "40px auto" }}>
+      <h1>Meetings</h1>
+      <button onClick={fetchMeetings} disabled={loading} style={{ marginBottom: 12 }}>
+        {loading ? "Refreshing..." : "Refresh"}
+      </button>
+      {err && <p style={{ color: "crimson" }}>{err}</p>}
+      <ul style={{ listStyle: "none", padding: 0 }}>
+        {items.map((m) => (
+          <li key={m.id} style={{ border: "1px solid #ddd", padding: 12, borderRadius: 8, marginBottom: 12 }}>
+            <div style={{ fontWeight: 600 }}>{m.filename}</div>
+            <div style={{ fontSize: 12, opacity: 0.8 }}>Created: {new Date(m.created_at).toLocaleString()}</div>
+            <div style={{ marginTop: 8 }}>
+              <strong>Summary:</strong>
+              <div style={{ whiteSpace: "pre-wrap" }}>{m.summary || "(not available)"}</div>
+            </div>
           </li>
         ))}
       </ul>
-    </div>
+      {items.length === 0 && !loading && <p>No meetings yet. Try uploading one!</p>}
+    </main>
   );
 }
