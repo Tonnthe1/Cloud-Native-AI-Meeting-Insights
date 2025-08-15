@@ -238,3 +238,7 @@ uploads/
 *token*
 *password*
 !requirements.txt
+
+# Claude AI files
+CLAUDE.md
+claude.md
