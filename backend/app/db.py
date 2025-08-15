@@ -3,7 +3,8 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv()  # Load .env
+load_dotenv(".env.local", override=True)  # Load .env.local with override
 
 # Build the DATABASE_URL from env
 user = os.getenv("POSTGRES_USER")

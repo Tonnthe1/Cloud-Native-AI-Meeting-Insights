@@ -18,11 +18,27 @@ services:
       timeout: 5s
       retries: 10
 
-  backend:
+  redis:
+    image: redis:7-alpine
+    restart: always
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  backend-api:
     build:
       context: ./backend
+      dockerfile: Dockerfile
     depends_on:
       db:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     env_file:
       - .env
@@ -32,11 +48,88 @@ services:
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_HOST: db
       POSTGRES_PORT: 5432
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
       OPENAI_API_KEY: ${OPENAI_API_KEY}
+      USE_WORKER_SERVICE: "true"
     ports:
       - "8000:8000"
     volumes:
       - ./backend:/app
 
+  backend-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.worker
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_HOST: db
+      POSTGRES_PORT: 5432
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      FW_MODEL: ${FW_MODEL:-base.en}
+      FW_COMPUTE_TYPE: ${FW_COMPUTE_TYPE:-float32}
+    ports:
+      - "8001:8001"
+    volumes:
+      - ./backend/uploads:/app/uploads:ro
+
+  frontend:
+    build:
+      context: ./frontend
+    depends_on:
+      - backend-api
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8000
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+
+  ray-head:
+    image: rayproject/ray:2.8.0-py310
+    command: ray start --head --dashboard-host=0.0.0.0 --dashboard-port=8265 --node-ip-address=0.0.0.0
+    ports:
+      - "8265:8265"  # Ray dashboard
+      - "10001:10001"  # Ray serve
+    volumes:
+      - ./ray_serve:/ray_serve
+    environment:
+      RAY_DISABLE_IMPORT_WARNING: 1
+    healthcheck:
+      test: ["CMD", "ray", "status"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  triton-server:
+    image: nvcr.io/nvidia/tritonserver:23.08-py3
+    command: tritonserver --model-repository=/models --http-port=8000 --grpc-port=8001 --metrics-port=8002 --log-verbose=1
+    ports:
+      - "8003:8000"  # HTTP inference API
+      - "8004:8001"  # GRPC inference API  
+      - "8005:8002"  # Metrics
+    volumes:
+      - ./triton_models:/models
+    environment:
+      CUDA_VISIBLE_DEVICES: ""  # Use CPU only for demo
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/v2/health/ready"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
 volumes:
   postgres-data:
+  redis-data:

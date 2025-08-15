@@ -21,6 +21,7 @@ def extract_keywords(text: str, top_k: int = 8) -> List[str]:
     for t in tokens:
         if t in _STOPWORDS:
             continue
-        freq[t] = freq.get(t, 0) + 1
+        freq[t] = freq.get(t, 0) + 1 
     sorted_terms = sorted(freq.items(), key=lambda x: x[1], reverse=True)
     return [t for t, _ in sorted_terms[:top_k]]
+    #to do: optimize

@@ -1,0 +1,381 @@
+name: Deploy to AWS EKS
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        default: 'dev'
+        type: choice
+        options:
+        - dev
+        - staging
+        - prod
+      terraform_action:
+        description: 'Terraform action to perform'
+        required: true
+        default: 'plan'
+        type: choice
+        options:
+        - plan
+        - apply
+        - destroy
+
+env:
+  AWS_REGION: us-west-2
+  TERRAFORM_DIR: ./infra/terraform
+  KUBECTL_VERSION: v1.28.0
+
+jobs:
+  terraform-plan:
+    name: Terraform Plan
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment }}
+    
+    outputs:
+      terraform-plan-exitcode: ${{ steps.plan.outputs.exitcode }}
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+    
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: 1.6.0
+        terraform_wrapper: false
+    
+    - name: Terraform Format Check
+      id: fmt
+      run: terraform fmt -check -recursive
+      working-directory: ${{ env.TERRAFORM_DIR }}
+      continue-on-error: true
+    
+    - name: Terraform Init
+      id: init
+      run: terraform init
+      working-directory: ${{ env.TERRAFORM_DIR }}
+    
+    - name: Terraform Validate
+      id: validate
+      run: terraform validate -no-color
+      working-directory: ${{ env.TERRAFORM_DIR }}
+    
+    - name: Terraform Plan
+      id: plan
+      run: |
+        terraform plan \
+          -var="environment=${{ github.event.inputs.environment }}" \
+          -var="cluster_name=meeting-insights-${{ github.event.inputs.environment }}" \
+          -out=tfplan \
+          -no-color
+      working-directory: ${{ env.TERRAFORM_DIR }}
+    
+    - name: Upload Terraform Plan
+      uses: actions/upload-artifact@v4
+      with:
+        name: terraform-plan-${{ github.event.inputs.environment }}
+        path: ${{ env.TERRAFORM_DIR }}/tfplan
+        retention-days: 5
+    
+    - name: Comment Terraform Plan
+      uses: actions/github-script@v7
+      if: github.event_name == 'pull_request'
+      with:
+        script: |
+          const output = `#### Terraform Format and Style 🖌\`${{ steps.fmt.outcome }}\`
+          #### Terraform Initialization ⚙️\`${{ steps.init.outcome }}\`
+          #### Terraform Validation 🤖\`${{ steps.validate.outcome }}\`
+          #### Terraform Plan 📖\`${{ steps.plan.outcome }}\`
+          
+          <details><summary>Show Plan</summary>
+          
+          \`\`\`terraform
+          ${{ steps.plan.outputs.stdout }}
+          \`\`\`
+          
+          </details>
+          
+          *Pusher: @${{ github.actor }}, Action: \`${{ github.event_name }}\`*`;
+          
+          github.rest.issues.createComment({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: output
+          })
+
+  terraform-apply:
+    name: Terraform Apply
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment }}
+    needs: terraform-plan
+    if: github.event.inputs.terraform_action == 'apply' && needs.terraform-plan.outputs.terraform-plan-exitcode == '0'
+    
+    outputs:
+      cluster-name: ${{ steps.output.outputs.cluster-name }}
+      rds-endpoint: ${{ steps.output.outputs.rds-endpoint }}
+      redis-endpoint: ${{ steps.output.outputs.redis-endpoint }}
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+    
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: 1.6.0
+        terraform_wrapper: false
+    
+    - name: Terraform Init
+      run: terraform init
+      working-directory: ${{ env.TERRAFORM_DIR }}
+    
+    - name: Download Terraform Plan
+      uses: actions/download-artifact@v4
+      with:
+        name: terraform-plan-${{ github.event.inputs.environment }}
+        path: ${{ env.TERRAFORM_DIR }}
+    
+    - name: Terraform Apply
+      run: terraform apply -auto-approve tfplan
+      working-directory: ${{ env.TERRAFORM_DIR }}
+    
+    - name: Get Terraform Outputs
+      id: output
+      run: |
+        echo "cluster-name=$(terraform output -raw cluster_name)" >> $GITHUB_OUTPUT
+        echo "rds-endpoint=$(terraform output -raw rds_endpoint)" >> $GITHUB_OUTPUT
+        echo "redis-endpoint=$(terraform output -raw redis_endpoint)" >> $GITHUB_OUTPUT
+      working-directory: ${{ env.TERRAFORM_DIR }}
+
+  build-and-push:
+    name: Build and Push Docker Images
+    runs-on: ubuntu-latest
+    needs: terraform-apply
+    if: github.event.inputs.terraform_action == 'apply'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+    
+    - name: Login to Amazon ECR
+      id: login-ecr
+      uses: aws-actions/amazon-ecr-login@v2
+    
+    - name: Create ECR repositories if they don't exist
+      env:
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+      run: |
+        aws ecr describe-repositories --repository-names meeting-insights-api || \
+        aws ecr create-repository --repository-name meeting-insights-api
+        
+        aws ecr describe-repositories --repository-names meeting-insights-worker || \
+        aws ecr create-repository --repository-name meeting-insights-worker
+        
+        aws ecr describe-repositories --repository-names meeting-insights-frontend || \
+        aws ecr create-repository --repository-name meeting-insights-frontend
+    
+    - name: Build and push API image
+      env:
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        ECR_REPOSITORY: meeting-insights-api
+        IMAGE_TAG: ${{ github.sha }}
+      run: |
+        docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG ./backend
+        docker tag $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG $ECR_REGISTRY/$ECR_REPOSITORY:latest
+        docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+        docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+    
+    - name: Build and push Worker image
+      env:
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        ECR_REPOSITORY: meeting-insights-worker
+        IMAGE_TAG: ${{ github.sha }}
+      run: |
+        docker build -f ./backend/Dockerfile.worker -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG ./backend
+        docker tag $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG $ECR_REGISTRY/$ECR_REPOSITORY:latest
+        docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+        docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+    
+    - name: Build and push Frontend image
+      env:
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        ECR_REPOSITORY: meeting-insights-frontend
+        IMAGE_TAG: ${{ github.sha }}
+      run: |
+        docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG ./frontend
+        docker tag $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG $ECR_REGISTRY/$ECR_REPOSITORY:latest
+        docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+        docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+
+  deploy-to-k8s:
+    name: Deploy to Kubernetes
+    runs-on: ubuntu-latest
+    needs: [terraform-apply, build-and-push]
+    if: github.event.inputs.terraform_action == 'apply'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+    
+    - name: Install kubectl
+      uses: azure/setup-kubectl@v3
+      with:
+        version: ${{ env.KUBECTL_VERSION }}
+    
+    - name: Update kubeconfig
+      run: |
+        aws eks update-kubeconfig \
+          --region ${{ env.AWS_REGION }} \
+          --name ${{ needs.terraform-apply.outputs.cluster-name }}
+    
+    - name: Login to Amazon ECR
+      id: login-ecr
+      uses: aws-actions/amazon-ecr-login@v2
+    
+    - name: Deploy AWS Load Balancer Controller
+      run: |
+        # Install AWS Load Balancer Controller if not exists
+        kubectl get deployment -n kube-system aws-load-balancer-controller || {
+          curl -O https://raw.githubusercontent.com/kubernetes-sigs/aws-load-balancer-controller/v2.7.2/docs/install/iam_policy.json
+          
+          helm repo add eks https://aws.github.io/eks-charts
+          helm repo update
+          
+          helm install aws-load-balancer-controller eks/aws-load-balancer-controller \
+            -n kube-system \
+            --set clusterName=${{ needs.terraform-apply.outputs.cluster-name }} \
+            --set serviceAccount.create=false \
+            --set serviceAccount.name=aws-load-balancer-controller
+        }
+    
+    - name: Update Kubernetes manifests with dynamic values
+      env:
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        IMAGE_TAG: ${{ github.sha }}
+        RDS_ENDPOINT: ${{ needs.terraform-apply.outputs.rds-endpoint }}
+        REDIS_ENDPOINT: ${{ needs.terraform-apply.outputs.redis-endpoint }}
+      run: |
+        # Update ConfigMap with actual endpoints
+        sed -i "s/REPLACE_WITH_RDS_ENDPOINT/$RDS_ENDPOINT/g" infra/k8s/configmap.yaml
+        sed -i "s/REPLACE_WITH_REDIS_ENDPOINT/$REDIS_ENDPOINT/g" infra/k8s/configmap.yaml
+        
+        # Update deployment images
+        sed -i "s|meeting-insights-api:latest|$ECR_REGISTRY/meeting-insights-api:$IMAGE_TAG|g" infra/k8s/api-deployment.yaml
+        sed -i "s|meeting-insights-worker:latest|$ECR_REGISTRY/meeting-insights-worker:$IMAGE_TAG|g" infra/k8s/worker-deployment.yaml
+        sed -i "s|meeting-insights-frontend:latest|$ECR_REGISTRY/meeting-insights-frontend:$IMAGE_TAG|g" infra/k8s/frontend-deployment.yaml
+    
+    - name: Create database credentials secret
+      run: |
+        # Get database credentials from AWS Secrets Manager
+        DB_SECRET=$(aws secretsmanager get-secret-value \
+          --secret-id meeting-insights-${{ github.event.inputs.environment }}-db-password \
+          --query SecretString --output text)
+        
+        DB_USERNAME=$(echo $DB_SECRET | jq -r .username)
+        DB_PASSWORD=$(echo $DB_SECRET | jq -r .password)
+        
+        kubectl create secret generic db-credentials \
+          --from-literal=username=$DB_USERNAME \
+          --from-literal=password=$DB_PASSWORD \
+          --namespace=meeting-insights \
+          --dry-run=client -o yaml | kubectl apply -f -
+    
+    - name: Create application secrets
+      run: |
+        kubectl create secret generic meeting-insights-secrets \
+          --from-literal=OPENAI_API_KEY="${{ secrets.OPENAI_API_KEY }}" \
+          --from-literal=API_KEY="${{ secrets.API_KEY }}" \
+          --namespace=meeting-insights \
+          --dry-run=client -o yaml | kubectl apply -f -
+    
+    - name: Deploy to Kubernetes
+      run: |
+        kubectl apply -f infra/k8s/namespace.yaml
+        kubectl apply -f infra/k8s/configmap.yaml
+        kubectl apply -f infra/k8s/secret.yaml
+        kubectl apply -f infra/k8s/api-deployment.yaml
+        kubectl apply -f infra/k8s/worker-deployment.yaml
+        kubectl apply -f infra/k8s/frontend-deployment.yaml
+        kubectl apply -f infra/k8s/ingress.yaml
+    
+    - name: Wait for deployments
+      run: |
+        kubectl wait --for=condition=available --timeout=300s deployment/meeting-insights-api -n meeting-insights
+        kubectl wait --for=condition=available --timeout=300s deployment/meeting-insights-worker -n meeting-insights
+        kubectl wait --for=condition=available --timeout=300s deployment/meeting-insights-frontend -n meeting-insights
+    
+    - name: Get service URLs
+      run: |
+        echo "=== Deployment Complete ==="
+        echo "API LoadBalancer URL:"
+        kubectl get svc meeting-insights-api-lb -n meeting-insights -o jsonpath='{.status.loadBalancer.ingress[0].hostname}:8000'
+        echo ""
+        echo "Frontend LoadBalancer URL:"
+        kubectl get svc meeting-insights-frontend-lb -n meeting-insights -o jsonpath='{.status.loadBalancer.ingress[0].hostname}:3000'
+        echo ""
+        echo "==========================="
+
+  terraform-destroy:
+    name: Terraform Destroy
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment }}
+    if: github.event.inputs.terraform_action == 'destroy'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+    
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: 1.6.0
+    
+    - name: Terraform Init
+      run: terraform init
+      working-directory: ${{ env.TERRAFORM_DIR }}
+    
+    - name: Terraform Destroy
+      run: |
+        terraform destroy \
+          -var="environment=${{ github.event.inputs.environment }}" \
+          -var="cluster_name=meeting-insights-${{ github.event.inputs.environment }}" \
+          -auto-approve
+      working-directory: ${{ env.TERRAFORM_DIR }}

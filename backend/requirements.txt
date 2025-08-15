@@ -24,3 +24,7 @@ asyncpg==0.29.0
 openai==1.65.0
 faster-whisper>=1.0.0
 pydub==0.25.1
+redis==5.0.1
+celery==5.3.4
+asyncpg==0.29.0
+httpx==0.25.2

@@ -1,0 +1,84 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: meeting-insights-worker
+  namespace: meeting-insights
+  labels:
+    app: meeting-insights-worker
+spec:
+  replicas: 1  # Can be scaled based on workload
+  selector:
+    matchLabels:
+      app: meeting-insights-worker
+  template:
+    metadata:
+      labels:
+        app: meeting-insights-worker
+    spec:
+      serviceAccountName: meeting-insights-worker
+      containers:
+      - name: worker
+        image: meeting-insights-worker:latest  # Replace with your ECR image
+        ports:
+        - containerPort: 8001
+        env:
+        - name: POSTGRES_USER
+          valueFrom:
+            secretKeyRef:
+              name: db-credentials
+              key: username
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: db-credentials
+              key: password
+        - name: OPENAI_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: meeting-insights-secrets
+              key: OPENAI_API_KEY
+        envFrom:
+        - configMapRef:
+            name: meeting-insights-config
+        resources:
+          requests:
+            memory: "1Gi"     # Higher memory for transcription
+            cpu: "500m"
+          limits:
+            memory: "2Gi"
+            cpu: "1000m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8001
+          initialDelaySeconds: 60
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8001
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        volumeMounts:
+        - name: uploads
+          mountPath: /app/uploads
+          readOnly: true
+      volumes:
+      - name: uploads
+        emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: meeting-insights-worker
+  namespace: meeting-insights
+  labels:
+    app: meeting-insights-worker
+spec:
+  selector:
+    app: meeting-insights-worker
+  ports:
+  - port: 80
+    targetPort: 8001
+    protocol: TCP
+  type: ClusterIP

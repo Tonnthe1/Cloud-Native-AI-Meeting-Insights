@@ -1,0 +1,2 @@
+ray[serve]==2.8.0
+requests==2.31.0

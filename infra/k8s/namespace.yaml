@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: meeting-insights
+  labels:
+    name: meeting-insights
+    app.kubernetes.io/name: meeting-insights

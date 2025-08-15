@@ -136,6 +136,9 @@ celerybeat.pid
 
 # Environments
 .env
+.env.local
+.env.production
+.env.development
 .envrc
 .venv
 env/
@@ -205,3 +208,33 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Terraform files
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+.terraform/
+.terraform.lock.hcl
+terraform.tfplan
+tfplan
+
+# Kubernetes temporary files
+*.yaml.bak
+
+# Application uploads
+uploads/
+*.wav
+*.mp3
+*.m4a
+*.mp4
+
+# AWS credentials
+.aws/
+
+# Secrets and keys (extra safety)
+*secret*
+*key*
+*token*
+*password*
+!requirements.txt

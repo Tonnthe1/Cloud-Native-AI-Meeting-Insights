@@ -1,0 +1,33 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: meeting-insights-config
+  namespace: meeting-insights
+data:
+  # Database configuration (secrets will be loaded separately)
+  POSTGRES_HOST: "REPLACE_WITH_RDS_ENDPOINT"
+  POSTGRES_PORT: "5432"
+  POSTGRES_DB: "meeting_insights"
+  
+  # Redis configuration
+  REDIS_HOST: "REPLACE_WITH_REDIS_ENDPOINT"
+  REDIS_PORT: "6379"
+  REDIS_DB: "0"
+  
+  # Application configuration
+  USE_WORKER_SERVICE: "true"
+  FW_MODEL: "base.en"
+  FW_COMPUTE_TYPE: "float32"
+  UPLOAD_DIR: "/app/uploads"
+  WORKER_HEALTH_PORT: "8001"
+  
+  # API configuration
+  DEBUG: "false"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: meeting-insights-frontend-config
+  namespace: meeting-insights
+data:
+  NEXT_PUBLIC_API_URL: "http://REPLACE_WITH_API_SERVICE_URL"
