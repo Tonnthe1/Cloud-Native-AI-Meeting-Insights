@@ -6,7 +6,6 @@ import { meetingService, Meeting } from "@/lib/api";
 import { MagnifyingGlassIcon, PlusIcon } from "@heroicons/react/24/outline";
 import { useRouter } from "next/navigation";
 
-// Loading skeleton component
 function MeetingCardSkeleton() {
   return (
     <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6 animate-pulse">
@@ -21,7 +20,6 @@ function MeetingCardSkeleton() {
   );
 }
 
-// Meeting card component
 function MeetingCard({ meeting }: { meeting: Meeting }) {
   const router = useRouter();
   

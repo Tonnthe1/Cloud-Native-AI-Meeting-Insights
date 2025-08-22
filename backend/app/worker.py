@@ -4,7 +4,7 @@ Meeting Processing Worker Service
 
 This worker service:
 - Pulls tasks from a Redis queue
-- Runs faster-whisper transcription  
+- Runs faster-whisper transcription
 - Generates summary using OpenAI
 - Updates the Postgres DB record
 - Has retry logic, logging, and health check endpoint
@@ -24,8 +24,6 @@ from datetime import datetime, timezone
 import openai
 from fastapi import FastAPI
 from faster_whisper import WhisperModel
-from sqlalchemy.orm import Session
-
 # Add the app directory to the path so we can import our modules
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
@@ -51,26 +49,29 @@ _worker_thread: Optional[threading.Thread] = None
 # FastAPI app for health checks
 app = FastAPI(title="Meeting Processing Worker")
 
+
 def load_whisper_model():
     """Load the faster-whisper model."""
     global _fw_model
-    
+
     model_name = os.getenv("FW_MODEL", "base.en")
     compute_type = os.getenv("FW_COMPUTE_TYPE", "float32")
-    
+
     logger.info(f"Loading faster-whisper model: {model_name}")
-    _fw_model = WhisperModel(model_name, device="cpu", compute_type=compute_type)
+    _fw_model = WhisperModel(model_name, device="cpu",
+                             compute_type=compute_type)
     logger.info("Model loaded successfully")
+
 
 def initialize_services():
     """Initialize Redis and other services."""
     global _task_queue
-    
+
     logger.info("Initializing Redis connection...")
     redis_client = get_redis_client()
     _task_queue = TaskQueue(redis_client)
     logger.info("Redis connection established")
-    
+
     # Test Redis connection
     try:
         redis_client.ping()
@@ -79,13 +80,15 @@ def initialize_services():
         logger.error(f"Redis connection failed: {e}")
         raise
 
+
 def _to_wav_16k_mono(src: Path) -> Path:
     """Convert audio file to 16kHz mono WAV format."""
     import subprocess
-    
+
     wav = src.with_suffix(".wav")
-    cmd = ["ffmpeg", "-y", "-i", str(src), "-ar", "16000", "-ac", "1", str(wav)]
-    
+    cmd = ["ffmpeg", "-y", "-i", str(src), "-ar", "16000", "-ac", "1",
+           str(wav)]
+
     try:
         subprocess.run(cmd, check=True, capture_output=True)
         logger.info(f"Converted {src} to {wav}")
@@ -94,20 +97,21 @@ def _to_wav_16k_mono(src: Path) -> Path:
         logger.error(f"FFmpeg conversion failed: {e.stderr.decode()}")
         raise
 
+
 def transcribe_audio(file_path: str) -> tuple[str, Optional[str]]:
     """Transcribe audio file using faster-whisper."""
     if _fw_model is None:
         raise RuntimeError("faster-whisper model not loaded")
-    
+
     src_path = Path(file_path)
     if not src_path.exists():
         raise FileNotFoundError(f"Audio file not found: {file_path}")
-    
+
     logger.info(f"Starting transcription of {file_path}")
-    
+
     # Convert to WAV format
     wav_path = _to_wav_16k_mono(src_path)
-    
+
     try:
         # Transcribe
         segments, info = _fw_model.transcribe(
@@ -115,34 +119,36 @@ def transcribe_audio(file_path: str) -> tuple[str, Optional[str]]:
             beam_size=5,
             vad_filter=True,
         )
-        
+
         # Extract text and language
         parts = [seg.text for seg in segments]
         transcript = " ".join(parts).strip()
         language = getattr(info, "language", None)
-        
-        logger.info(f"Transcription completed. Language: {language}, Length: {len(transcript)} chars")
+
+        logger.info(f"Transcription completed. Language: {language}, "
+                    f"Length: {len(transcript)} chars")
         return transcript, language
-        
+
     finally:
         # Clean up temporary WAV file
         if wav_path.exists() and wav_path != src_path:
             wav_path.unlink()
 
+
 def generate_summary(transcript: str) -> str:
     """Generate summary using OpenAI."""
     if not transcript.strip():
         return ""
-    
+
     logger.info("Generating summary with OpenAI")
-    
+
     prompt = (
         "Summarize the following meeting transcript in bullet points, "
         "highlight action items, key decisions, and follow-up tasks. "
         "Use clear English. Transcript:\n"
         + transcript
     )
-    
+
     try:
         completion = openai.chat.completions.create(
             model="gpt-3.5-turbo",
@@ -153,18 +159,19 @@ def generate_summary(transcript: str) -> str:
             temperature=0.2,
             max_tokens=512
         )
-        
+
         summary = completion.choices[0].message.content or ""
         logger.info(f"Summary generated: {len(summary)} chars")
         return summary
-        
+
     except Exception as e:
         logger.error(f"Summary generation failed: {e}")
         return "Summary generation failed"
 
-def update_meeting_record(meeting_id: int, transcript: str, summary: str, 
-                         language: Optional[str], duration: Optional[float], 
-                         keywords: Optional[str]) -> bool:
+
+def update_meeting_record(meeting_id: int, transcript: str, summary: str,
+                          language: Optional[str], duration: Optional[float],
+                          keywords: Optional[str]) -> bool:
     """Update the meeting record in the database."""
     db = SessionLocal()
     try:
@@ -172,7 +179,7 @@ def update_meeting_record(meeting_id: int, transcript: str, summary: str,
         if not meeting:
             logger.error(f"Meeting {meeting_id} not found in database")
             return False
-        
+
         # Update fields
         meeting.transcript = transcript
         meeting.summary = summary
@@ -182,11 +189,11 @@ def update_meeting_record(meeting_id: int, transcript: str, summary: str,
             meeting.duration_seconds = duration
         if keywords:
             meeting.keywords = keywords
-        
+
         db.commit()
         logger.info(f"Meeting {meeting_id} updated successfully")
         return True
-        
+
     except Exception as e:
         logger.error(f"Database update failed for meeting {meeting_id}: {e}")
         db.rollback()
@@ -194,36 +201,37 @@ def update_meeting_record(meeting_id: int, transcript: str, summary: str,
     finally:
         db.close()
 
+
 def process_meeting_job(job_data: Dict[str, Any]) -> Dict[str, Any]:
     """Process a single meeting job."""
     job_id = job_data["id"]
     meeting_id = job_data["meeting_id"]
     file_path = job_data["file_path"]
-    
+
     logger.info(f"Processing job {job_id} for meeting {meeting_id}")
-    
+
     try:
         # Transcribe audio
         transcript, language = transcribe_audio(file_path)
-        
-        # Generate summary  
+
+        # Generate summary
         summary = generate_summary(transcript)
-        
+
         # Extract keywords
         keywords_list = extract_keywords(transcript, top_k=8)
         keywords_str = ",".join(keywords_list) if keywords_list else None
-        
+
         # Get audio duration
         duration = get_audio_duration_seconds(file_path)
-        
+
         # Update database
         success = update_meeting_record(
             meeting_id, transcript, summary, language, duration, keywords_str
         )
-        
+
         if not success:
             raise Exception("Failed to update database record")
-        
+
         result = {
             "transcript_length": len(transcript),
             "language": language,
@@ -231,47 +239,47 @@ def process_meeting_job(job_data: Dict[str, Any]) -> Dict[str, Any]:
             "keywords_count": len(keywords_list) if keywords_list else 0,
             "duration_seconds": duration
         }
-        
+
         logger.info(f"Job {job_id} completed successfully")
         return result
-        
+
     except Exception as e:
         logger.error(f"Job {job_id} failed: {e}")
         logger.error(traceback.format_exc())
         raise
 
+
 def worker_loop():
     """Main worker loop that processes jobs from the queue."""
-    global _worker_running
-    
+
     logger.info("Worker loop started")
-    
+
     while _worker_running:
         try:
             # Get next job (blocking with timeout)
             job_data = _task_queue.get_next_job()
-            
+
             if job_data is None:
                 # Timeout - continue loop
                 continue
-            
+
             job_id = job_data["id"]
             logger.info(f"Picked up job: {job_id}")
-            
+
             try:
                 # Process the job
                 result = process_meeting_job(job_data)
-                
+
                 # Mark as completed
                 _task_queue.complete_job(job_id, result)
                 logger.info(f"Job {job_id} marked as completed")
-                
+
             except Exception as e:
                 # Mark as failed (with retry if attempts remaining)
                 error_msg = str(e)
                 _task_queue.fail_job(job_id, error_msg, retry=True)
                 logger.error(f"Job {job_id} failed: {error_msg}")
-                
+
         except KeyboardInterrupt:
             logger.info("Worker interrupted by user")
             break
@@ -280,32 +288,34 @@ def worker_loop():
             logger.error(traceback.format_exc())
             # Sleep briefly before retrying
             time.sleep(5)
-    
+
     logger.info("Worker loop stopped")
+
 
 def start_worker():
     """Start the worker in a separate thread."""
     global _worker_running, _worker_thread
-    
+
     if _worker_running:
         logger.warning("Worker already running")
         return
-    
+
     _worker_running = True
     _worker_thread = threading.Thread(target=worker_loop, daemon=True)
     _worker_thread.start()
     logger.info("Worker thread started")
 
+
 def stop_worker():
     """Stop the worker thread."""
-    global _worker_running, _worker_thread
-    
+    global _worker_running
+
     if not _worker_running:
         return
-    
+
     logger.info("Stopping worker...")
     _worker_running = False
-    
+
     if _worker_thread:
         _worker_thread.join(timeout=30)
         if _worker_thread.is_alive():
@@ -313,18 +323,19 @@ def stop_worker():
         else:
             logger.info("Worker stopped successfully")
 
+
 def signal_handler(signum, frame):
     """Handle shutdown signals."""
     logger.info(f"Received signal {signum}, shutting down...")
     stop_worker()
     sys.exit(0)
 
+
 # Health check endpoints
 @app.get("/health")
 def health_check():
     """Health check endpoint."""
-    global _fw_model, _task_queue, _worker_running
-    
+
     status = {
         "status": "healthy",
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -334,7 +345,7 @@ def health_check():
         "queue_length": 0,
         "processing_count": 0
     }
-    
+
     # Check Redis connection
     try:
         if _task_queue:
@@ -345,15 +356,16 @@ def health_check():
     except Exception as e:
         status["redis_error"] = str(e)
         status["status"] = "unhealthy"
-    
+
     return status
+
 
 @app.get("/stats")
 def get_stats():
     """Get worker statistics."""
     if not _task_queue:
         return {"error": "Queue not initialized"}
-    
+
     return {
         "queue_length": _task_queue.get_queue_length(),
         "processing_count": _task_queue.get_processing_count(),
@@ -361,39 +373,42 @@ def get_stats():
         "model_loaded": _fw_model is not None
     }
 
+
 def main():
     """Main entry point for the worker service."""
     logger.info("Starting Meeting Processing Worker")
-    
+
     # Set up signal handlers
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
-    
+
     try:
         # Initialize OpenAI
         openai.api_key = os.getenv("OPENAI_API_KEY")
         if not openai.api_key:
-            logger.warning("OPENAI_API_KEY not set - summary generation will fail")
-        
+            logger.warning("OPENAI_API_KEY not set - summary generation "
+                           "will fail")
+
         # Initialize services
         initialize_services()
         load_whisper_model()
-        
+
         # Start the worker
         start_worker()
-        
+
         logger.info("Worker service ready")
-        
+
         # Keep the main thread alive
         while _worker_running:
             time.sleep(1)
-            
+
     except Exception as e:
         logger.error(f"Worker initialization failed: {e}")
         logger.error(traceback.format_exc())
         sys.exit(1)
     finally:
         stop_worker()
+
 
 if __name__ == "__main__":
     main()

@@ -19,7 +19,6 @@ interface LanguageSample {
   name: string;
   language: string;
   description: string;
-  // For demo, we'll use placeholder text instead of actual audio files
   sampleText: string;
 }
 
