@@ -27,10 +27,10 @@ from faster_whisper import WhisperModel
 # Add the app directory to the path so we can import our modules
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from app.db import SessionLocal
-from app.models import Meeting
-from app.redis_client import get_redis_client, TaskQueue
-from app.util import get_audio_duration_seconds, extract_keywords
+from app.db import SessionLocal  # noqa: E402
+from app.models import Meeting  # noqa: E402
+from app.redis_client import get_redis_client, TaskQueue  # noqa: E402
+from app.util import get_audio_duration_seconds, extract_keywords  # noqa: E402
 
 
 # Configure logging

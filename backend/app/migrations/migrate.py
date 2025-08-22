@@ -11,7 +11,7 @@ from sqlalchemy import create_engine, text
 
 # Add the app directory to the path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from app.db import DATABASE_URL
+from app.db import DATABASE_URL  # noqa: E402
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
