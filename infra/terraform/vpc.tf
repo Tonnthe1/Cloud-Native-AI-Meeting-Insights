@@ -3,7 +3,7 @@ module "vpc" {
   source = "terraform-aws-modules/vpc/aws"
   version = "~> 5.0"
 
-  name = "${var.cluster_name}-vpc"
+  name = "${local.cluster_name}-vpc"
   cidr = var.vpc_cidr
 
   azs             = slice(data.aws_availability_zones.available.names, 0, 3)
@@ -21,12 +21,12 @@ module "vpc" {
   # Tags required for EKS
   public_subnet_tags = {
     "kubernetes.io/role/elb" = "1"
-    "kubernetes.io/cluster/${var.cluster_name}" = "shared"
+    "kubernetes.io/cluster/${local.cluster_name}" = "shared"
   }
 
   private_subnet_tags = {
     "kubernetes.io/role/internal-elb" = "1"
-    "kubernetes.io/cluster/${var.cluster_name}" = "shared"
+    "kubernetes.io/cluster/${local.cluster_name}" = "shared"
   }
 
   tags = merge(var.tags, {
@@ -36,7 +36,7 @@ module "vpc" {
 
 # Security Group for RDS
 resource "aws_security_group" "rds" {
-  name_prefix = "${var.cluster_name}-rds-"
+  name_prefix = "${local.cluster_name}-rds-"
   vpc_id      = module.vpc.vpc_id
 
   ingress {
@@ -56,14 +56,14 @@ resource "aws_security_group" "rds" {
   }
 
   tags = merge(var.tags, {
-    Name = "${var.cluster_name}-rds-sg"
+    Name = "${local.cluster_name}-rds-sg"
     Environment = var.environment
   })
 }
 
 # Security Group for Redis
 resource "aws_security_group" "redis" {
-  name_prefix = "${var.cluster_name}-redis-"
+  name_prefix = "${local.cluster_name}-redis-"
   vpc_id      = module.vpc.vpc_id
 
   ingress {
@@ -83,25 +83,25 @@ resource "aws_security_group" "redis" {
   }
 
   tags = merge(var.tags, {
-    Name = "${var.cluster_name}-redis-sg"
+    Name = "${local.cluster_name}-redis-sg"
     Environment = var.environment
   })
 }
 
 # DB Subnet Group for RDS
 resource "aws_db_subnet_group" "main" {
-  name       = "${var.cluster_name}-db-subnet-group"
+  name       = "${local.cluster_name}-db-subnet-group"
   subnet_ids = module.vpc.private_subnets
 
   tags = merge(var.tags, {
-    Name = "${var.cluster_name}-db-subnet-group"
+    Name = "${local.cluster_name}-db-subnet-group"
     Environment = var.environment
   })
 }
 
 # ElastiCache Subnet Group
 resource "aws_elasticache_subnet_group" "main" {
-  name       = "${var.cluster_name}-cache-subnet"
+  name       = "${local.cluster_name}-cache-subnet"
   subnet_ids = module.vpc.private_subnets
 
   tags = merge(var.tags, {

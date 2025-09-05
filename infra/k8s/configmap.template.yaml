@@ -1,0 +1,25 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: meeting-insights-config
+  namespace: meeting-insights
+data:
+  # Database configuration
+  POSTGRES_HOST: "{{RDS_ENDPOINT}}"
+  POSTGRES_PORT: "5432"
+  POSTGRES_DB: "meeting_insights"
+  
+  # Redis configuration
+  REDIS_URL: "redis://{{REDIS_ENDPOINT}}:6379"
+  
+  # Application configuration
+  LOG_LEVEL: "INFO"
+  MAX_UPLOAD_SIZE: "50MB"
+  
+  # FastAPI configuration
+  API_HOST: "0.0.0.0"
+  API_PORT: "8000"
+  
+  # AWS configuration (automatically detected)
+  AWS_REGION: "{{AWS_REGION}}"
+  AWS_DEFAULT_REGION: "{{AWS_REGION}}"

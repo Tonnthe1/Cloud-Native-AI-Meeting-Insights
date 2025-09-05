@@ -103,12 +103,27 @@ docker compose up --build
 
 ### ☁️ AWS EKS Production Deployment
 
-**One-command automated EKS provisioning with Terraform & GitHub Actions** (typical creation time 10–20 minutes).
+**🚀 TRUE ONE-CLICK DEPLOYMENT** - Deploy everything with a single command! Zero configuration required.
 
-#### Prerequisites
-- AWS CLI configured with appropriate permissions
-- GitHub repository with secrets configured
-- OpenAI API key
+```bash
+cd infra
+./one-click-deploy.sh
+```
+
+✨ **Completely automated:** Auto-detects AWS config, generates unique names, builds images, deploys infrastructure (10–20 minutes).
+
+**Prerequisites (one-time setup):**
+```bash
+# 1. Install AWS CLI and configure credentials
+curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+unzip awscliv2.zip && sudo ./aws/install
+aws configure  # Enter your AWS credentials
+
+# 2. Set OpenAI API key (for AI summaries)
+export OPENAI_API_KEY="your-key-here"
+```
+
+#### Alternative: GitHub Actions Deployment
 
 #### GitHub Secrets Required
 ```

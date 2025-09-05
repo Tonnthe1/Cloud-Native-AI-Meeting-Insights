@@ -83,15 +83,12 @@ terraform_plan() {
     log_info "Running Terraform plan..."
     cd $TERRAFORM_DIR
     
-    # Check if tfvars file exists
-    if [ ! -f "terraform.tfvars" ]; then
-        log_warning "terraform.tfvars not found. Creating from example..."
-        cp terraform.tfvars.example terraform.tfvars
-        log_warning "Please edit terraform.tfvars with your desired configuration"
-        read -p "Press Enter to continue after editing terraform.tfvars..."
-    fi
+    # Auto-detect AWS region if not set
+    AWS_REGION=$(aws configure get region 2>/dev/null || echo "us-west-2")
+    log_info "Using AWS region: $AWS_REGION"
     
-    terraform plan -out=tfplan
+    # Run plan with auto-detected values
+    terraform plan -var="aws_region=$AWS_REGION" -out=tfplan
     cd ..
     log_success "Terraform plan completed"
 }
@@ -173,6 +170,16 @@ deploy_application() {
     log_warning "Note: You need to build and push Docker images to ECR before deploying pods"
     log_info "Application manifests applied. Update image references in deployment files."
     
+    # Show instructions for next steps
+    echo ""
+    log_info "Next Steps to Complete Deployment:"
+    echo "1. Build your Docker image: cd ../backend && docker build -t meeting-insights-api ."
+    echo "2. Get your ECR repository URL from AWS Console or run: aws ecr describe-repositories --repository-names meeting-insights-api"
+    echo "3. Tag your image: docker tag meeting-insights-api:latest <ECR-URL>:latest"
+    echo "4. Push to ECR: docker push <ECR-URL>:latest"
+    echo "5. Update k8s/api-deployment.yaml with the actual ECR image URL"
+    echo "6. Apply the deployments: kubectl apply -f k8s/api-deployment.yaml"
+    
     log_success "Application deployment completed"
 }
 
@@ -195,6 +202,31 @@ get_cluster_info() {
     cd ..
 }
 
+create_ecr_repo() {
+    log_info "Creating ECR repository for your Docker images..."
+    
+    # Check if repository already exists
+    if aws ecr describe-repositories --repository-names meeting-insights-api &> /dev/null; then
+        log_info "ECR repository 'meeting-insights-api' already exists"
+    else
+        log_info "Creating ECR repository 'meeting-insights-api'..."
+        aws ecr create-repository --repository-name meeting-insights-api
+        log_success "ECR repository created"
+    fi
+    
+    # Get the repository URI
+    ECR_URI=$(aws ecr describe-repositories --repository-names meeting-insights-api --query 'repositories[0].repositoryUri' --output text)
+    log_success "ECR Repository URI: $ECR_URI"
+    
+    echo ""
+    log_info "Docker commands to build and push your image:"
+    echo "1. cd ../backend"
+    echo "2. docker build -t meeting-insights-api ."
+    echo "3. aws ecr get-login-password --region $(aws configure get region) | docker login --username AWS --password-stdin $ECR_URI"
+    echo "4. docker tag meeting-insights-api:latest $ECR_URI:latest"
+    echo "5. docker push $ECR_URI:latest"
+}
+
 show_usage() {
     echo "Usage: $0 [command]"
     echo ""
@@ -206,6 +238,7 @@ show_usage() {
     echo "  destroy     - Destroy infrastructure"
     echo "  kubectl     - Configure kubectl for the cluster"
     echo "  deploy-app  - Deploy application to Kubernetes"
+    echo "  create-ecr  - Create ECR repository and show push commands"
     echo "  info        - Show cluster information"
     echo "  help        - Show this help message"
     echo ""
@@ -242,6 +275,9 @@ case $1 in
         ;;
     deploy-app)
         deploy_application
+        ;;
+    create-ecr)
+        create_ecr_repo
         ;;
     info)
         get_cluster_info

@@ -10,10 +10,22 @@ variable "environment" {
   default     = "dev"
 }
 
-variable "cluster_name" {
-  description = "Name of the EKS cluster"
+variable "cluster_name_override" {
+  description = "Override the auto-generated cluster name (leave empty for auto-generation)"
   type        = string
-  default     = "meeting-insights"
+  default     = ""
+}
+
+# Generate a random suffix to make cluster names unique
+resource "random_string" "suffix" {
+  length  = 6
+  special = false
+  upper   = false
+}
+
+# Local values for computed names
+locals {
+  cluster_name = var.cluster_name_override != "" ? var.cluster_name_override : "meeting-insights-${random_string.suffix.result}"
 }
 
 variable "cluster_version" {

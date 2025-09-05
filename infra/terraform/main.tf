@@ -14,6 +14,10 @@ terraform {
       source  = "hashicorp/helm"
       version = "~> 2.10"
     }
+    random = {
+      source  = "hashicorp/random"
+      version = "~> 3.4"
+    }
   }
 
   # Optional: Use S3 backend for state management

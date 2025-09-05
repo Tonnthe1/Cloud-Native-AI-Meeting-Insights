@@ -6,7 +6,7 @@ resource "random_password" "db_password" {
 
 # RDS PostgreSQL Database
 resource "aws_db_instance" "postgresql" {
-  identifier     = "${var.cluster_name}-postgres"
+  identifier     = "${local.cluster_name}-postgres"
   engine         = "postgres"
   engine_version = "15.4"
   instance_class = var.db_instance_class
@@ -42,14 +42,14 @@ resource "aws_db_instance" "postgresql" {
   auto_minor_version_upgrade = true
 
   tags = merge(var.tags, {
-    Name        = "${var.cluster_name}-postgres"
+    Name        = "${local.cluster_name}-postgres"
     Environment = var.environment
   })
 }
 
 # ElastiCache Redis Cluster
 resource "aws_elasticache_replication_group" "redis" {
-  replication_group_id       = "${var.cluster_name}-redis"
+  replication_group_id       = "${local.cluster_name}-redis"
   description                = "Redis cluster for Meeting Insights"
 
   # Node configuration
@@ -77,14 +77,14 @@ resource "aws_elasticache_replication_group" "redis" {
   automatic_failover_enabled = false
 
   tags = merge(var.tags, {
-    Name        = "${var.cluster_name}-redis"
+    Name        = "${local.cluster_name}-redis"
     Environment = var.environment
   })
 }
 
 # Store database password in AWS Secrets Manager
 resource "aws_secretsmanager_secret" "db_password" {
-  name        = "${var.cluster_name}-db-password"
+  name        = "${local.cluster_name}-db-password"
   description = "Database password for Meeting Insights PostgreSQL"
 
   tags = merge(var.tags, {
@@ -108,7 +108,7 @@ module "secrets_manager_irsa_role" {
   source = "terraform-aws-modules/iam/aws//modules/iam-role-for-service-accounts-eks"
   version = "~> 5.0"
 
-  role_name = "${var.cluster_name}-secrets-manager"
+  role_name = "${local.cluster_name}-secrets-manager"
 
   role_policy_arns = {
     policy = aws_iam_policy.secrets_manager.arn
@@ -126,7 +126,7 @@ module "secrets_manager_irsa_role" {
 
 # IAM policy for accessing secrets
 resource "aws_iam_policy" "secrets_manager" {
-  name        = "${var.cluster_name}-secrets-manager"
+  name        = "${local.cluster_name}-secrets-manager"
   description = "Policy for accessing secrets from EKS"
 
   policy = jsonencode({

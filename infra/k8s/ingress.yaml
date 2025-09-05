@@ -7,12 +7,15 @@ metadata:
     kubernetes.io/ingress.class: alb
     alb.ingress.kubernetes.io/scheme: internet-facing
     alb.ingress.kubernetes.io/target-type: ip
-    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}, {"HTTPS": 443}]'
-    alb.ingress.kubernetes.io/ssl-redirect: '443'
-    alb.ingress.kubernetes.io/certificate-arn: "REPLACE_WITH_ACM_CERTIFICATE_ARN"  # Optional: Add SSL certificate
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}]'
+    # SSL configuration (uncomment and configure for production):
+    # alb.ingress.kubernetes.io/ssl-redirect: '443'
+    # alb.ingress.kubernetes.io/certificate-arn: "YOUR_ACM_CERTIFICATE_ARN"
 spec:
   rules:
-  - host: meeting-insights.yourdomain.com  # Replace with your domain
+  # For development, you can use the ALB DNS name directly
+  # For production, replace with your actual domain
+  - host: meeting-insights-dev.example.com
     http:
       paths:
       - path: /api

@@ -18,7 +18,7 @@ spec:
       serviceAccountName: meeting-insights-api
       containers:
       - name: api
-        image: YOUR_AWS_ACCOUNT.dkr.ecr.us-west-2.amazonaws.com/meeting-insights-api:latest
+        image: {{ECR_REPOSITORY_URI}}:latest
         ports:
         - containerPort: 8000
         env:

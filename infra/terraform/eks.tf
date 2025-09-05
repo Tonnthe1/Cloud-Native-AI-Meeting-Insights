@@ -3,7 +3,7 @@ module "eks" {
   source = "terraform-aws-modules/eks/aws"
   version = "~> 19.15"
 
-  cluster_name    = var.cluster_name
+  cluster_name    = local.cluster_name
   cluster_version = var.cluster_version
 
   # Networking
@@ -18,7 +18,7 @@ module "eks" {
   # EKS Managed Node Groups
   eks_managed_node_groups = {
     main = {
-      name = "${var.cluster_name}-nodes"
+      name = "${local.cluster_name}-nodes"
 
       instance_types = var.node_instance_types
       capacity_type  = "ON_DEMAND"  # Can be changed to SPOT for cost savings
@@ -82,7 +82,7 @@ module "load_balancer_controller_irsa_role" {
   source = "terraform-aws-modules/iam/aws//modules/iam-role-for-service-accounts-eks"
   version = "~> 5.0"
 
-  role_name = "${var.cluster_name}-load-balancer-controller"
+  role_name = "${local.cluster_name}-load-balancer-controller"
 
   attach_load_balancer_controller_policy = true
 
@@ -101,7 +101,7 @@ module "ebs_csi_irsa_role" {
   source = "terraform-aws-modules/iam/aws//modules/iam-role-for-service-accounts-eks"
   version = "~> 5.0"
 
-  role_name = "${var.cluster_name}-ebs-csi-driver"
+  role_name = "${local.cluster_name}-ebs-csi-driver"
 
   attach_ebs_csi_policy = true
 
