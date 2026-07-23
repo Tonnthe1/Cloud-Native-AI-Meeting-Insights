@@ -88,3 +88,24 @@ jobs:
         run: |
           cat frontend-build.log
           exit 1
+
+  infrastructure:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.6.6
+      - name: Check Terraform formatting
+        working-directory: infra/terraform
+        run: terraform fmt -check -recursive
+      - name: Initialize Terraform modules
+        working-directory: infra/terraform
+        run: terraform init -backend=false
+      - name: Validate Terraform
+        working-directory: infra/terraform
+        run: terraform validate
+      - name: Validate Docker Compose topology
+        run: |
+          cp .env.example .env
+          docker compose config --quiet
