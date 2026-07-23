@@ -1,6 +1,5 @@
 import json
 import os
-import shutil
 import subprocess
 import uuid
 from contextlib import asynccontextmanager
@@ -25,27 +24,28 @@ from app.redis_client import (
     get_redis_client,
 )
 from app.schemas import MeetingDetail, MeetingListItem, StructuredInsights
+from app.storage import ObjectStore, build_object_key, get_object_store
 from app.util import extract_keywords, get_audio_duration_seconds
 
 load_dotenv()
 load_dotenv(".env.local", override=True)
 
-UPLOAD_DIR = Path(os.getenv("UPLOAD_DIR", "app/uploads"))
-UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-
 _task_queue: Optional[TaskQueue] = None
 _cache_service: Optional[CacheService] = None
+_object_store: Optional[ObjectStore] = None
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    global _task_queue, _cache_service
+    global _task_queue, _cache_service, _object_store
     Base.metadata.create_all(bind=engine)
     try:
         from app.migrations.migrate import run_migrations
         run_migrations()
     except Exception as exc:
         print(f"Warning: migration failed: {exc}")
+
+    _object_store = get_object_store()
 
     try:
         queue_client = get_redis_client()
@@ -65,6 +65,7 @@ async def lifespan(_: FastAPI):
         await _cache_service.redis.aclose()
     _task_queue = None
     _cache_service = None
+    _object_store = None
 
 
 app = FastAPI(title="Cloud-Native AI Meeting Insights", lifespan=lifespan)
@@ -106,14 +107,16 @@ def get_cache_service() -> CacheService:
     return _cache_service
 
 
-def _save_upload(file: UploadFile) -> Path:
-    original = os.path.basename(file.filename or "meeting-audio")
-    suffix = Path(original).suffix.lower()
-    safe_name = f"{uuid.uuid4().hex}{suffix}"
-    destination = UPLOAD_DIR / safe_name
-    with destination.open("wb") as output:
-        shutil.copyfileobj(file.file, output)
-    return destination
+def _require_object_store() -> ObjectStore:
+    if _object_store is None:
+        raise HTTPException(status_code=503, detail="Object storage unavailable")
+    return _object_store
+
+
+def _store_upload(file: UploadFile) -> str:
+    object_key = build_object_key(file.filename or "meeting-audio")
+    _require_object_store().put_fileobj(file.file, object_key, file.content_type)
+    return object_key
 
 
 def _split_keywords(value: Optional[str]) -> Optional[List[str]]:
@@ -143,7 +146,7 @@ def _meeting_list_item(meeting: Meeting) -> MeetingListItem:
     )
 
 
-def _process_synchronously(meeting: Meeting, file_path: Path, db: Session) -> None:
+def _process_synchronously(meeting: Meeting, object_key: str, db: Session) -> None:
     from faster_whisper import WhisperModel
 
     model = WhisperModel(
@@ -151,31 +154,43 @@ def _process_synchronously(meeting: Meeting, file_path: Path, db: Session) -> No
         device=os.getenv("FW_DEVICE", "cpu"),
         compute_type=os.getenv("FW_COMPUTE_TYPE", "int8"),
     )
-    wav_path = file_path.with_name(f"{file_path.stem}-{uuid.uuid4().hex}.wav")
-    try:
-        subprocess.run(
-            ["ffmpeg", "-y", "-i", str(file_path), "-ar", "16000", "-ac", "1", str(wav_path)],
-            check=True,
-            capture_output=True,
-        )
-        segments, info = model.transcribe(str(wav_path), vad_filter=True)
-        transcript = " ".join(segment.text.strip() for segment in segments).strip()
-        insights = generate_insights(transcript).to_dict()
-        meeting.transcript = transcript
-        meeting.summary = insights["overview"]
-        meeting.insights_json = json.dumps(insights, ensure_ascii=False)
-        meeting.insight_provider = insights.get("provider")
-        meeting.processing_status = "completed"
-        meeting.language = getattr(info, "language", None)
-        meeting.duration_seconds = get_audio_duration_seconds(str(file_path))
-        meeting.keywords = ",".join(extract_keywords(transcript, top_k=8)) or None
-        db.commit()
-    except Exception:
-        meeting.processing_status = "failed"
-        db.commit()
-        raise
-    finally:
-        wav_path.unlink(missing_ok=True)
+    store = _require_object_store()
+    with store.materialize(object_key) as file_path:
+        wav_path = file_path.with_name(f"{file_path.stem}-{uuid.uuid4().hex}.wav")
+        try:
+            subprocess.run(
+                [
+                    "ffmpeg",
+                    "-y",
+                    "-i",
+                    str(file_path),
+                    "-ar",
+                    "16000",
+                    "-ac",
+                    "1",
+                    str(wav_path),
+                ],
+                check=True,
+                capture_output=True,
+            )
+            segments, info = model.transcribe(str(wav_path), vad_filter=True)
+            transcript = " ".join(segment.text.strip() for segment in segments).strip()
+            insights = generate_insights(transcript).to_dict()
+            meeting.transcript = transcript
+            meeting.summary = insights["overview"]
+            meeting.insights_json = json.dumps(insights, ensure_ascii=False)
+            meeting.insight_provider = insights.get("provider")
+            meeting.processing_status = "completed"
+            meeting.language = getattr(info, "language", None)
+            meeting.duration_seconds = get_audio_duration_seconds(str(file_path))
+            meeting.keywords = ",".join(extract_keywords(transcript, top_k=8)) or None
+            db.commit()
+        except Exception:
+            meeting.processing_status = "failed"
+            db.commit()
+            raise
+        finally:
+            wav_path.unlink(missing_ok=True)
 
 
 @app.get("/health")
@@ -184,6 +199,8 @@ def health_check():
         "status": "ok",
         "queue_available": _task_queue is not None,
         "cache_available": _cache_service is not None,
+        "storage_available": _object_store is not None,
+        "storage_backend": os.getenv("STORAGE_BACKEND", "local"),
         "ai_provider": os.getenv("AI_PROVIDER", "local"),
     }
 
@@ -198,9 +215,9 @@ async def analyze_meeting(
     if content_type and not content_type.startswith("audio/"):
         raise HTTPException(status_code=415, detail="Only audio files are supported")
 
-    file_path = _save_upload(file)
+    object_key = _store_upload(file)
     meeting = Meeting(
-        filename=os.path.basename(file.filename or file_path.name),
+        filename=os.path.basename(file.filename or Path(object_key).name),
         transcript="",
         summary="",
         processing_status="queued",
@@ -214,7 +231,7 @@ async def analyze_meeting(
         try:
             job_id = _task_queue.enqueue_meeting_job(
                 meeting_id=meeting.id,
-                file_path=str(file_path),
+                object_key=object_key,
                 filename=meeting.filename,
             )
             if _cache_service:
@@ -228,18 +245,20 @@ async def analyze_meeting(
         except QueueFullError as exc:
             meeting.processing_status = "failed"
             db.commit()
+            _require_object_store().delete(object_key)
             raise HTTPException(status_code=429, detail=str(exc)) from exc
 
     if os.getenv("ALLOW_SYNC_FALLBACK", "false").lower() != "true":
         meeting.processing_status = "failed"
         db.commit()
+        _require_object_store().delete(object_key)
         raise HTTPException(
             status_code=503,
             detail="Worker queue unavailable and synchronous fallback is disabled",
         )
 
     try:
-        _process_synchronously(meeting, file_path, db)
+        _process_synchronously(meeting, object_key, db)
         return {"status": "completed", "meeting_id": meeting.id}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Processing failed: {exc}") from exc
