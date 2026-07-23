@@ -122,6 +122,8 @@ jobs:
       - name: Validate Terraform
         working-directory: infra/terraform
         run: terraform validate
+      - name: Validate deployment script syntax
+        run: bash -n infra/deploy.sh
       - name: Validate Docker Compose topology
         run: |
           cp .env.example .env
