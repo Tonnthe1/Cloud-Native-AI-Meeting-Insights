@@ -1,5 +1,7 @@
-from sqlalchemy import Column, Integer, String, Text, DateTime, Float
 from datetime import datetime, timezone
+
+from sqlalchemy import Column, DateTime, Float, Integer, String, Text
+
 from .db import Base
 
 
@@ -8,6 +10,7 @@ class Meeting(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     filename = Column(String, nullable=False)
+    audio_object_key = Column(String(512), index=True)
     transcript = Column(Text)
     summary = Column(Text)
     insights_json = Column(Text)
