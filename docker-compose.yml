@@ -117,7 +117,8 @@ services:
     depends_on:
       - backend-api
     environment:
-      NEXT_PUBLIC_API_URL: http://localhost:8000
+      INTERNAL_API_URL: http://backend-api:8000
+      API_KEY: ${API_KEY:-}
     ports:
       - "3000:3000"
     volumes:
