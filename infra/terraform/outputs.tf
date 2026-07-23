@@ -1,3 +1,8 @@
+output "aws_region" {
+  description = "AWS region used for the deployment"
+  value       = var.aws_region
+}
+
 # EKS Cluster Outputs
 output "cluster_name" {
   description = "Name of the EKS cluster"
