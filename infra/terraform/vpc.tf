@@ -1,6 +1,6 @@
 # VPC Configuration
 module "vpc" {
-  source = "terraform-aws-modules/vpc/aws"
+  source  = "terraform-aws-modules/vpc/aws"
   version = "~> 5.0"
 
   name = "${local.cluster_name}-vpc"
@@ -12,7 +12,7 @@ module "vpc" {
 
   enable_nat_gateway = true
   enable_vpn_gateway = false
-  single_nat_gateway = true  # Cost optimization - use single NAT gateway
+  single_nat_gateway = true # Cost optimization - use single NAT gateway
 
   # DNS configuration
   enable_dns_hostnames = true
@@ -20,12 +20,12 @@ module "vpc" {
 
   # Tags required for EKS
   public_subnet_tags = {
-    "kubernetes.io/role/elb" = "1"
+    "kubernetes.io/role/elb"                      = "1"
     "kubernetes.io/cluster/${local.cluster_name}" = "shared"
   }
 
   private_subnet_tags = {
-    "kubernetes.io/role/internal-elb" = "1"
+    "kubernetes.io/role/internal-elb"             = "1"
     "kubernetes.io/cluster/${local.cluster_name}" = "shared"
   }
 
@@ -56,7 +56,7 @@ resource "aws_security_group" "rds" {
   }
 
   tags = merge(var.tags, {
-    Name = "${local.cluster_name}-rds-sg"
+    Name        = "${local.cluster_name}-rds-sg"
     Environment = var.environment
   })
 }
@@ -83,7 +83,7 @@ resource "aws_security_group" "redis" {
   }
 
   tags = merge(var.tags, {
-    Name = "${local.cluster_name}-redis-sg"
+    Name        = "${local.cluster_name}-redis-sg"
     Environment = var.environment
   })
 }
@@ -94,7 +94,7 @@ resource "aws_db_subnet_group" "main" {
   subnet_ids = module.vpc.private_subnets
 
   tags = merge(var.tags, {
-    Name = "${local.cluster_name}-db-subnet-group"
+    Name        = "${local.cluster_name}-db-subnet-group"
     Environment = var.environment
   })
 }
