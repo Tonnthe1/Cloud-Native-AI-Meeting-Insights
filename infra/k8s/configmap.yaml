@@ -37,4 +37,4 @@ metadata:
   name: meeting-insights-frontend-config
   namespace: meeting-insights
 data:
-  NEXT_PUBLIC_API_URL: "http://REPLACE_WITH_API_SERVICE_URL"
+  INTERNAL_API_URL: "http://meeting-insights-api"
