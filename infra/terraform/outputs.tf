@@ -47,8 +47,8 @@ output "public_subnets" {
 
 # Database Outputs
 output "rds_endpoint" {
-  description = "RDS instance endpoint"
-  value       = aws_db_instance.postgresql.endpoint
+  description = "RDS instance hostname"
+  value       = aws_db_instance.postgresql.address
 }
 
 output "rds_port" {
