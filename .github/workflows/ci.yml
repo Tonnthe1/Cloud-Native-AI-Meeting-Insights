@@ -52,6 +52,25 @@ jobs:
         run: |
           cat backend-pytest.log
           exit 1
+      - name: Test S3-compatible storage with MinIO
+        working-directory: backend
+        env:
+          PYTHONPATH: .
+          RUN_STORAGE_INTEGRATION: "1"
+          STORAGE_BACKEND: s3
+          S3_BUCKET: ci-meeting-insights
+          S3_ENDPOINT_URL: http://localhost:9000
+          AWS_REGION: us-east-1
+          AWS_ACCESS_KEY_ID: minioadmin
+          AWS_SECRET_ACCESS_KEY: minio-ci-password
+          S3_STARTUP_ATTEMPTS: "20"
+          S3_STARTUP_DELAY_SECONDS: "1"
+        run: |
+          docker run -d --name ci-minio -p 9000:9000 \
+            -e MINIO_ROOT_USER=minioadmin \
+            -e MINIO_ROOT_PASSWORD=minio-ci-password \
+            minio/minio:RELEASE.2025-04-22T22-12-26Z server /data
+          python -m pytest -q tests/test_storage_integration.py
       - name: Build backend images
         run: |
           docker build -t meeting-insights-api ./backend
