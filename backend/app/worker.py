@@ -23,7 +23,11 @@ from app.db import SessionLocal  # noqa: E402
 from app.insights import generate_insights  # noqa: E402
 from app.models import Meeting  # noqa: E402
 from app.redis_client import TaskQueue, get_redis_client  # noqa: E402
-from app.storage import ObjectStore, get_object_store  # noqa: E402
+from app.storage import (  # noqa: E402
+    ObjectStore,
+    get_object_store,
+    should_delete_audio_after_processing,
+)
 from app.util import extract_keywords, get_audio_duration_seconds  # noqa: E402
 
 logging.basicConfig(
@@ -132,6 +136,35 @@ def update_meeting_record(
         db.close()
 
 
+def _delete_source_after_success(meeting_id: int, object_key: str) -> bool:
+    if not should_delete_audio_after_processing() or _object_store is None:
+        return False
+
+    try:
+        _object_store.delete(object_key)
+    except Exception as exc:
+        logger.warning("Raw audio cleanup failed for %s: %s", object_key, exc)
+        return False
+
+    db = SessionLocal()
+    try:
+        meeting = db.get(Meeting, meeting_id)
+        if meeting and meeting.audio_object_key == object_key:
+            meeting.audio_object_key = None
+            db.commit()
+        return True
+    except Exception as exc:
+        db.rollback()
+        logger.warning(
+            "Raw audio was deleted but database cleanup failed for meeting %s: %s",
+            meeting_id,
+            exc,
+        )
+        return False
+    finally:
+        db.close()
+
+
 def process_meeting_job(job_data: Dict[str, Any]) -> Dict[str, Any]:
     meeting_id = int(job_data["meeting_id"])
     object_key = job_data.get("object_key")
@@ -155,6 +188,7 @@ def process_meeting_job(job_data: Dict[str, Any]) -> Dict[str, Any]:
             keywords=",".join(keywords_list) or None,
             insights=insights,
         )
+        source_deleted = _delete_source_after_success(meeting_id, object_key)
         return {
             "meeting_id": meeting_id,
             "transcript_length": len(transcript),
@@ -162,6 +196,7 @@ def process_meeting_job(job_data: Dict[str, Any]) -> Dict[str, Any]:
             "duration_seconds": duration,
             "insight_provider": insights.get("provider"),
             "action_items": len(insights.get("action_items", [])),
+            "raw_audio_deleted": source_deleted,
         }
     except Exception:
         _set_status(meeting_id, "failed")
@@ -214,26 +249,27 @@ def signal_handler(signum, _frame) -> None:
 
 @app.get("/health")
 def health_check() -> Dict[str, Any]:
-    status: Dict[str, Any] = {
+    health: Dict[str, Any] = {
         "status": "healthy",
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "worker_running": _worker_running,
         "model_loaded": _fw_model is not None,
         "storage_connected": _object_store is not None,
         "storage_backend": os.getenv("STORAGE_BACKEND", "local"),
+        "delete_audio_after_processing": should_delete_audio_after_processing(),
         "redis_connected": False,
     }
     try:
         if _task_queue:
             _task_queue.redis.ping()
-            status.update({
+            health.update({
                 "redis_connected": True,
                 "queue_length": _task_queue.get_queue_length(),
                 "processing_count": _task_queue.get_processing_count(),
             })
     except Exception as exc:
-        status.update({"status": "unhealthy", "redis_error": str(exc)})
-    return status
+        health.update({"status": "unhealthy", "redis_error": str(exc)})
+    return health
 
 
 def main() -> None:
