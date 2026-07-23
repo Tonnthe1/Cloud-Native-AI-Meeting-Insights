@@ -16,9 +16,9 @@ jobs:
           cache: pip
           cache-dependency-path: backend/requirements.txt
       - name: Install backend dependencies
-        run: pip install -r backend/requirements.txt flake8
+        run: pip install --quiet -r backend/requirements.txt flake8
       - name: Lint backend
-        run: flake8 backend/app backend/tests --ignore=E501,W503
+        run: flake8 backend/app backend/tests --ignore=E501,W503 --show-source --statistics
       - name: Test backend
         working-directory: backend
         run: pytest -q
@@ -38,7 +38,7 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - name: Install frontend dependencies
         working-directory: frontend
-        run: npm ci
+        run: npm ci --silent
       - name: Build frontend
         working-directory: frontend
         env:
