@@ -23,6 +23,7 @@ from app.db import SessionLocal  # noqa: E402
 from app.insights import generate_insights  # noqa: E402
 from app.models import Meeting  # noqa: E402
 from app.redis_client import TaskQueue, get_redis_client  # noqa: E402
+from app.storage import ObjectStore, get_object_store  # noqa: E402
 from app.util import extract_keywords, get_audio_duration_seconds  # noqa: E402
 
 logging.basicConfig(
@@ -33,6 +34,7 @@ logger = logging.getLogger(__name__)
 
 _fw_model: Optional[WhisperModel] = None
 _task_queue: Optional[TaskQueue] = None
+_object_store: Optional[ObjectStore] = None
 _worker_running = False
 _worker_thread: Optional[threading.Thread] = None
 app = FastAPI(title="Meeting Processing Worker")
@@ -52,10 +54,11 @@ def load_whisper_model() -> None:
 
 
 def initialize_services() -> None:
-    global _task_queue
+    global _task_queue, _object_store
     client = get_redis_client()
     client.ping()
     _task_queue = TaskQueue(client)
+    _object_store = get_object_store()
 
 
 def _to_wav_16k_mono(src: Path) -> Path:
@@ -131,12 +134,19 @@ def update_meeting_record(
 
 def process_meeting_job(job_data: Dict[str, Any]) -> Dict[str, Any]:
     meeting_id = int(job_data["meeting_id"])
+    object_key = job_data.get("object_key")
+    if not object_key:
+        raise ValueError("Queued meeting job is missing object_key")
+    if _object_store is None:
+        raise RuntimeError("Object storage unavailable")
+
     _set_status(meeting_id, "processing")
     try:
-        transcript, language = transcribe_audio(job_data["file_path"])
-        insights = generate_insights(transcript).to_dict()
-        keywords_list = extract_keywords(transcript, top_k=8)
-        duration = get_audio_duration_seconds(job_data["file_path"])
+        with _object_store.materialize(object_key) as source_path:
+            transcript, language = transcribe_audio(str(source_path))
+            insights = generate_insights(transcript).to_dict()
+            keywords_list = extract_keywords(transcript, top_k=8)
+            duration = get_audio_duration_seconds(str(source_path))
         update_meeting_record(
             meeting_id=meeting_id,
             transcript=transcript,
@@ -209,6 +219,8 @@ def health_check() -> Dict[str, Any]:
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "worker_running": _worker_running,
         "model_loaded": _fw_model is not None,
+        "storage_connected": _object_store is not None,
+        "storage_backend": os.getenv("STORAGE_BACKEND", "local"),
         "redis_connected": False,
     }
     try:
