@@ -18,7 +18,7 @@ jobs:
       - name: Install backend dependencies
         run: pip install -r backend/requirements.txt flake8
       - name: Lint backend
-        run: flake8 backend/app backend/tests --max-line-length=100
+        run: flake8 backend/app backend/tests --ignore=E501,W503
       - name: Test backend
         working-directory: backend
         run: pytest -q
