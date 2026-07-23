@@ -10,6 +10,8 @@ ENVIRONMENT=${ENVIRONMENT:-dev}
 AWS_REGION=${AWS_REGION:-us-west-2}
 CLUSTER_NAME_OVERRIDE=${CLUSTER_NAME_OVERRIDE:-meeting-insights-${ENVIRONMENT}}
 IMAGE_TAG=${IMAGE_TAG:-$(git -C "${ROOT_DIR}" rev-parse --short HEAD 2>/dev/null || echo latest)}
+STATE_LOCK_TABLE=${STATE_LOCK_TABLE:-meeting-insights-terraform-locks}
+STATE_KEY=${STATE_KEY:-meeting-insights/${ENVIRONMENT}/terraform.tfstate}
 
 log() {
   printf '[meeting-insights] %s\n' "$*"
@@ -31,14 +33,65 @@ tf() {
 }
 
 check() {
-  require_commands aws terraform kubectl docker sed jq
+  require_commands aws terraform kubectl docker helm sed jq
   aws sts get-caller-identity >/dev/null
   log "Prerequisites are available."
 }
 
+bootstrap_terraform_state() {
+  local account_id bucket
+  account_id=$(aws sts get-caller-identity --query Account --output text)
+  bucket=${TF_STATE_BUCKET:-${account_id}-meeting-insights-tfstate-${AWS_REGION}}
+  export TF_STATE_BUCKET=${bucket}
+
+  if ! aws s3api head-bucket --bucket "${bucket}" 2>/dev/null; then
+    if [[ "${AWS_REGION}" == "us-east-1" ]]; then
+      aws s3api create-bucket --bucket "${bucket}" --region "${AWS_REGION}" >/dev/null
+    else
+      aws s3api create-bucket \
+        --bucket "${bucket}" \
+        --region "${AWS_REGION}" \
+        --create-bucket-configuration LocationConstraint="${AWS_REGION}" >/dev/null
+    fi
+  fi
+
+  aws s3api put-public-access-block \
+    --bucket "${bucket}" \
+    --public-access-block-configuration \
+      BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
+  aws s3api put-bucket-encryption \
+    --bucket "${bucket}" \
+    --server-side-encryption-configuration \
+      '{"Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"}}]}'
+  aws s3api put-bucket-versioning \
+    --bucket "${bucket}" \
+    --versioning-configuration Status=Enabled
+
+  if ! aws dynamodb describe-table \
+    --region "${AWS_REGION}" \
+    --table-name "${STATE_LOCK_TABLE}" >/dev/null 2>&1; then
+    aws dynamodb create-table \
+      --region "${AWS_REGION}" \
+      --table-name "${STATE_LOCK_TABLE}" \
+      --attribute-definitions AttributeName=LockID,AttributeType=S \
+      --key-schema AttributeName=LockID,KeyType=HASH \
+      --billing-mode PAY_PER_REQUEST >/dev/null
+    aws dynamodb wait table-exists \
+      --region "${AWS_REGION}" \
+      --table-name "${STATE_LOCK_TABLE}"
+  fi
+
+  tf init -reconfigure \
+    -backend-config="bucket=${bucket}" \
+    -backend-config="key=${STATE_KEY}" \
+    -backend-config="region=${AWS_REGION}" \
+    -backend-config="dynamodb_table=${STATE_LOCK_TABLE}" \
+    -backend-config="encrypt=true"
+}
+
 init() {
   check
-  tf init
+  bootstrap_terraform_state
   tf fmt -check -recursive
   tf validate
 }
@@ -61,6 +114,7 @@ apply() {
 
 configure_kubectl() {
   local cluster_name
+  bootstrap_terraform_state
   cluster_name=$(tf output -raw cluster_name)
   AWS_REGION=$(tf output -raw aws_region)
   export AWS_REGION
@@ -167,6 +221,34 @@ create_runtime_identity() {
     --dry-run=client -o yaml | kubectl apply -f -
 }
 
+ensure_load_balancer_controller() {
+  local role_arn cluster_name vpc_id
+  role_arn=$(tf output -raw load_balancer_controller_role_arn)
+  cluster_name=$(tf output -raw cluster_name)
+  vpc_id=$(tf output -raw vpc_id)
+
+  kubectl create serviceaccount aws-load-balancer-controller \
+    --namespace kube-system \
+    --dry-run=client -o yaml | kubectl apply -f -
+  kubectl annotate serviceaccount aws-load-balancer-controller \
+    --namespace kube-system \
+    eks.amazonaws.com/role-arn="${role_arn}" \
+    --overwrite
+
+  helm repo add eks https://aws.github.io/eks-charts --force-update
+  helm upgrade --install aws-load-balancer-controller \
+    eks/aws-load-balancer-controller \
+    --namespace kube-system \
+    --version 1.7.2 \
+    --set clusterName="${cluster_name}" \
+    --set region="${AWS_REGION}" \
+    --set vpcId="${vpc_id}" \
+    --set serviceAccount.create=false \
+    --set serviceAccount.name=aws-load-balancer-controller \
+    --wait \
+    --timeout 10m
+}
+
 deploy() {
   check
   configure_kubectl
@@ -183,6 +265,7 @@ deploy() {
   trap 'rm -rf "${rendered}"' RETURN
   render_manifests "${rendered}"
   create_runtime_identity
+  ensure_load_balancer_controller
 
   kubectl apply -f "${rendered}/configmap.yaml"
   kubectl create secret generic meeting-insights-secrets \
@@ -221,6 +304,8 @@ destroy() {
 }
 
 info() {
+  check
+  bootstrap_terraform_state
   tf output
 }
 
@@ -230,13 +315,13 @@ Usage: infra/deploy.sh <command>
 
 Commands:
   check       Verify local dependencies and AWS credentials
-  init        Initialize and validate Terraform
+  init        Bootstrap remote state, initialize, and validate Terraform
   plan        Create a Terraform plan
   apply       Apply the current plan (creates one when missing)
   build       Build and push API, worker, and frontend images
   deploy      Render manifests from Terraform outputs and deploy to EKS
   all         Plan, apply, build, and deploy
-  destroy     Destroy infrastructure; requires CONFIRM_DESTROY=yes
+  destroy     Destroy application infrastructure; requires CONFIRM_DESTROY=yes
   info        Print Terraform outputs
 EOF
 }
