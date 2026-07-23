@@ -1,15 +1,8 @@
 import axios, { AxiosError } from "axios";
 
-const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "") ||
-  "http://localhost:8000";
-
-const API_KEY = process.env.NEXT_PUBLIC_API_KEY;
-
 const api = axios.create({
-  baseURL: API_BASE_URL,
+  baseURL: "/api",
   timeout: 120_000,
-  headers: API_KEY ? { "x-api-key": API_KEY } : undefined,
 });
 
 export interface ActionItem {
@@ -99,9 +92,7 @@ export const meetingService = {
     const form = new FormData();
     form.append("file", file);
     return request(() =>
-      api.post<AnalyzeMeetingResponse>("/analyze-meeting", form, {
-        headers: { "Content-Type": "multipart/form-data" },
-      }),
+      api.post<AnalyzeMeetingResponse>("/analyze-meeting", form),
     );
   },
 
