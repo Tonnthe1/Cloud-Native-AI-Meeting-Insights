@@ -158,6 +158,15 @@ def build_object_key(filename: str) -> str:
     return f"meetings/{uuid.uuid4().hex}{suffix}"
 
 
+def should_delete_audio_after_processing() -> bool:
+    return os.getenv("DELETE_AUDIO_AFTER_PROCESSING", "true").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
 def get_object_store() -> ObjectStore:
     backend = os.getenv("STORAGE_BACKEND", "local").strip().lower()
     if backend == "local":
