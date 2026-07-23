@@ -38,7 +38,6 @@ def test_upload_queue_worker_database_pipeline(monkeypatch):
         lambda _path: 42.5,
     )
 
-    object_key = None
     with TestClient(app) as client:
         upload = client.post(
             "/analyze-meeting",
@@ -52,10 +51,10 @@ def test_upload_queue_worker_database_pipeline(monkeypatch):
         job = queue.get_next_job()
         assert job is not None
         assert job["id"] == queued["job_id"]
-        object_key = job["object_key"]
-        assert object_key.startswith("meetings/")
+        assert job["object_key"].startswith("meetings/")
 
         result = worker.process_meeting_job(job)
+        assert result["raw_audio_deleted"] is True
         queue.complete_job(job["id"], result)
 
         status = client.get(f"/job-status/{job['id']}")
@@ -78,8 +77,6 @@ def test_upload_queue_worker_database_pipeline(monkeypatch):
         assert meeting.language == "en"
         assert meeting.duration_seconds == 42.5
         assert meeting.insight_provider == "local-heuristic"
+        assert meeting.audio_object_key is None
     finally:
         db.close()
-
-    if object_key and worker._object_store is not None:
-        worker._object_store.delete(object_key)
