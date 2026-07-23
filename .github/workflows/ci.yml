@@ -97,8 +97,25 @@ jobs:
         with:
           terraform_version: 1.6.6
       - name: Check Terraform formatting
+        id: terraform-format
+        continue-on-error: true
         working-directory: infra/terraform
-        run: terraform fmt -check -recursive
+        run: |
+          terraform fmt -recursive
+          git diff -- . > ../../terraform-fmt.patch
+          test ! -s ../../terraform-fmt.patch
+      - name: Upload Terraform formatting diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-format-diagnostics
+          path: terraform-fmt.patch
+          if-no-files-found: error
+      - name: Enforce Terraform formatting
+        if: steps.terraform-format.outcome == 'failure'
+        run: |
+          cat terraform-fmt.patch
+          exit 1
       - name: Initialize Terraform modules
         working-directory: infra/terraform
         run: terraform init -backend=false
