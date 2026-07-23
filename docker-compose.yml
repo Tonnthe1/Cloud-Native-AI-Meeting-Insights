@@ -31,6 +31,19 @@ services:
       timeout: 3s
       retries: 5
 
+  minio:
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    restart: always
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${AWS_ACCESS_KEY_ID:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${AWS_SECRET_ACCESS_KEY:-change-me-minio}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio-data:/data
+
   backend-api:
     build:
       context: ./backend
@@ -40,6 +53,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      minio:
+        condition: service_started
     env_file:
       - .env
     environment:
@@ -50,6 +65,12 @@ services:
       POSTGRES_PORT: 5432
       REDIS_HOST: redis
       REDIS_PORT: 6379
+      STORAGE_BACKEND: s3
+      S3_BUCKET: ${S3_BUCKET:-meeting-insights}
+      S3_ENDPOINT_URL: http://minio:9000
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-minioadmin}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-change-me-minio}
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       USE_WORKER_SERVICE: "true"
     ports:
@@ -66,6 +87,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      minio:
+        condition: service_started
     env_file:
       - .env
     environment:
@@ -76,13 +99,17 @@ services:
       POSTGRES_PORT: 5432
       REDIS_HOST: redis
       REDIS_PORT: 6379
+      STORAGE_BACKEND: s3
+      S3_BUCKET: ${S3_BUCKET:-meeting-insights}
+      S3_ENDPOINT_URL: http://minio:9000
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-minioadmin}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-change-me-minio}
       OPENAI_API_KEY: ${OPENAI_API_KEY}
-      FW_MODEL: ${FW_MODEL:-base.en}
-      FW_COMPUTE_TYPE: ${FW_COMPUTE_TYPE:-float32}
+      FW_MODEL: ${FW_MODEL:-small}
+      FW_COMPUTE_TYPE: ${FW_COMPUTE_TYPE:-int8}
     ports:
       - "8001:8001"
-    volumes:
-      - ./backend/uploads:/app/uploads:ro
 
   frontend:
     build:
@@ -101,8 +128,8 @@ services:
     image: rayproject/ray:2.8.0-py310
     command: ray start --head --dashboard-host=0.0.0.0 --dashboard-port=8265 --node-ip-address=0.0.0.0
     ports:
-      - "8265:8265"  # Ray dashboard
-      - "10001:10001"  # Ray serve
+      - "8265:8265"
+      - "10001:10001"
     volumes:
       - ./ray_serve:/ray_serve
     environment:
@@ -117,13 +144,13 @@ services:
     image: nvcr.io/nvidia/tritonserver:23.08-py3
     command: tritonserver --model-repository=/models --http-port=8000 --grpc-port=8001 --metrics-port=8002 --log-verbose=1
     ports:
-      - "8003:8000"  # HTTP inference API
-      - "8004:8001"  # GRPC inference API  
-      - "8005:8002"  # Metrics
+      - "8003:8000"
+      - "8004:8001"
+      - "8005:8002"
     volumes:
       - ./triton_models:/models
     environment:
-      CUDA_VISIBLE_DEVICES: ""  # Use CPU only for demo
+      CUDA_VISIBLE_DEVICES: ""
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/v2/health/ready"]
       interval: 30s
@@ -133,3 +160,4 @@ services:
 volumes:
   postgres-data:
   redis-data:
+  minio-data:
