@@ -1,5 +1,3 @@
-import os
-
 from app.insights import generate_insights, generate_local_insights
 
 
