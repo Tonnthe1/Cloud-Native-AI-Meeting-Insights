@@ -43,7 +43,7 @@ variable "vpc_cidr" {
 variable "node_instance_types" {
   description = "Instance types for EKS worker nodes"
   type        = list(string)
-  default     = ["t3.medium"]  # Cost-effective for testing
+  default     = ["t3.medium"]
 }
 
 variable "node_desired_capacity" {
@@ -67,13 +67,13 @@ variable "node_min_capacity" {
 variable "db_instance_class" {
   description = "RDS instance class"
   type        = string
-  default     = "db.t3.micro"  # Free tier eligible
+  default     = "db.t3.micro"
 }
 
 variable "db_allocated_storage" {
   description = "RDS allocated storage in GB"
   type        = number
-  default     = 20  # Minimum for gp2
+  default     = 20
 }
 
 variable "db_name" {
@@ -88,17 +88,28 @@ variable "db_username" {
   default     = "meetinguser"
 }
 
+variable "audio_retention_days" {
+  description = "Number of days to retain uploaded meeting audio in object storage"
+  type        = number
+  default     = 30
+
+  validation {
+    condition     = var.audio_retention_days >= 1
+    error_message = "audio_retention_days must be at least 1."
+  }
+}
+
 variable "redis_node_type" {
   description = "ElastiCache Redis node type"
   type        = string
-  default     = "cache.t3.micro"  # Cost-effective for testing
+  default     = "cache.t3.micro"
 }
 
 variable "tags" {
   description = "Additional tags for resources"
   type        = map(string)
   default = {
-    Owner = "DevOps"
+    Owner   = "DevOps"
     Purpose = "Meeting Insights Demo"
   }
 }
@@ -106,5 +117,5 @@ variable "tags" {
 variable "allowed_cidr_blocks" {
   description = "CIDR blocks allowed to access EKS cluster API"
   type        = list(string)
-  default     = []  # Leave empty to allow all (0.0.0.0/0), or specify your IPs
+  default     = []
 }
