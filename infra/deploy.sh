@@ -31,7 +31,7 @@ tf() {
 }
 
 check() {
-  require_commands aws terraform kubectl docker sed
+  require_commands aws terraform kubectl docker sed jq
   aws sts get-caller-identity >/dev/null
   log "Prerequisites are available."
 }
@@ -63,6 +63,7 @@ configure_kubectl() {
   local cluster_name
   cluster_name=$(tf output -raw cluster_name)
   AWS_REGION=$(tf output -raw aws_region)
+  export AWS_REGION
   aws eks update-kubeconfig --region "${AWS_REGION}" --name "${cluster_name}"
 }
 
@@ -122,12 +123,6 @@ render_manifests() {
   sed -i.bak "s/REPLACE_WITH_S3_BUCKET/${s3_bucket}/g" "${output_dir}/configmap.yaml"
   sed -i.bak "s/REPLACE_WITH_AWS_REGION/${region}/g" "${output_dir}/configmap.yaml"
 
-  if [[ -n "${API_PUBLIC_URL:-}" ]]; then
-    sed -i.bak "s|http://REPLACE_WITH_API_SERVICE_URL|${API_PUBLIC_URL}|g" "${output_dir}/configmap.yaml"
-  else
-    sed -i.bak "s|http://REPLACE_WITH_API_SERVICE_URL|http://meeting-insights-api|g" "${output_dir}/configmap.yaml"
-  fi
-
   sed -i.bak -E \
     "s|image: .*meeting-insights-api:latest.*|image: ${ECR_REGISTRY}/meeting-insights-api:${IMAGE_TAG}|" \
     "${output_dir}/api-deployment.yaml"
@@ -138,6 +133,38 @@ render_manifests() {
     "s|image: .*meeting-insights-frontend:latest.*|image: ${ECR_REGISTRY}/meeting-insights-frontend:${IMAGE_TAG}|" \
     "${output_dir}/frontend-deployment.yaml"
   rm -f "${output_dir}"/*.bak
+}
+
+create_runtime_identity() {
+  local role_arn db_secret_name db_secret db_username db_password
+
+  role_arn=$(tf output -raw application_runtime_role_arn)
+  db_secret_name=$(tf output -raw db_secret_name)
+
+  kubectl apply -f "${K8S_DIR}/namespace.yaml"
+  for service_account in meeting-insights-api meeting-insights-worker; do
+    kubectl create serviceaccount "${service_account}" \
+      --namespace meeting-insights \
+      --dry-run=client -o yaml | kubectl apply -f -
+    kubectl annotate serviceaccount "${service_account}" \
+      --namespace meeting-insights \
+      eks.amazonaws.com/role-arn="${role_arn}" \
+      --overwrite
+  done
+
+  db_secret=$(aws secretsmanager get-secret-value \
+    --region "${AWS_REGION}" \
+    --secret-id "${db_secret_name}" \
+    --query SecretString \
+    --output text)
+  db_username=$(jq -r '.username' <<<"${db_secret}")
+  db_password=$(jq -r '.password' <<<"${db_secret}")
+
+  kubectl create secret generic db-credentials \
+    --namespace meeting-insights \
+    --from-literal=username="${db_username}" \
+    --from-literal=password="${db_password}" \
+    --dry-run=client -o yaml | kubectl apply -f -
 }
 
 deploy() {
@@ -155,10 +182,9 @@ deploy() {
   rendered=$(mktemp -d)
   trap 'rm -rf "${rendered}"' RETURN
   render_manifests "${rendered}"
+  create_runtime_identity
 
-  kubectl apply -f "${K8S_DIR}/namespace.yaml"
   kubectl apply -f "${rendered}/configmap.yaml"
-
   kubectl create secret generic meeting-insights-secrets \
     --namespace meeting-insights \
     --from-literal=OPENAI_API_KEY="${OPENAI_API_KEY:-}" \
@@ -176,6 +202,9 @@ deploy() {
     deployment/meeting-insights-worker -n meeting-insights
   kubectl wait --for=condition=available --timeout=10m \
     deployment/meeting-insights-frontend -n meeting-insights
+
+  log "Deployment is available through the meeting-insights-ingress ALB."
+  kubectl get ingress meeting-insights-ingress -n meeting-insights
 }
 
 destroy() {
