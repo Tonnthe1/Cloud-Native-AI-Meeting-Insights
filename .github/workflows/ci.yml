@@ -1,4 +1,4 @@
-name: Backend CI
+name: CI
 
 on:
   push:
@@ -6,32 +6,41 @@ on:
   pull_request:
 
 jobs:
-  backend-test:
+  backend:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-
-      - name: Set up Python
-        uses: actions/setup-python@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
-
-      - name: Install dependencies
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - name: Install backend dependencies
+        run: pip install -r backend/requirements.txt flake8
+      - name: Lint backend
+        run: flake8 backend/app backend/tests --max-line-length=100
+      - name: Test backend
+        working-directory: backend
+        run: pytest -q
+      - name: Build backend images
         run: |
-          cd backend
-          pip install -r requirements.txt
+          docker build -t meeting-insights-api ./backend
+          docker build -f backend/Dockerfile.worker -t meeting-insights-worker ./backend
 
-      - name: Lint (flake8)
-        run: |
-          cd backend
-          pip install flake8
-          flake8 .
-
-      - name: Run tests (pytest)
-        run: |
-          cd backend
-          pytest || echo "no tests yet"
-
-      - name: Build Docker image
-        run: |
-          docker build -t meeting-backend ./backend
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+      - name: Build frontend
+        working-directory: frontend
+        env:
+          NEXT_PUBLIC_API_URL: http://localhost:8000
+        run: npm run build
