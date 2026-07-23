@@ -1,19 +1,19 @@
 # Cloud-Native AI Meeting Insights
 
-A privacy-first, self-hostable meeting-to-action platform. Upload meeting audio, transcribe it with faster-whisper, extract structured outcomes, and review the results from a Next.js interface.
+A privacy-first, self-hostable meeting-to-action platform. Upload meeting audio, transcribe it with faster-whisper, extract structured outcomes, and review results from a Next.js interface.
 
-> The project is under active development. The core application builds and its unit tests pass, but a real AWS deployment and published performance benchmark are not yet claimed as validated.
+> The project is under active development. Clean builds, unit tests, a real PostgreSQL/Redis/MinIO pipeline test, and infrastructure validation run in CI. A live AWS deployment and published performance benchmark are not yet claimed as validated.
 
 ## What is implemented
 
-- Audio upload through a FastAPI API
-- Asynchronous Redis-backed processing with retry limits and queue backpressure
+- FastAPI audio upload API
+- Redis-backed jobs with retry limits and queue backpressure
 - faster-whisper transcription
 - Privacy-aware insight routing:
   - deterministic local extraction by default
   - OpenAI-compatible local model endpoint when configured
   - OpenAI only after explicitly setting `AI_PROVIDER=openai`
-- Structured meeting outcomes:
+- Structured outcomes:
   - overview
   - key points
   - decisions
@@ -21,22 +21,24 @@ A privacy-first, self-hostable meeting-to-action platform. Upload meeting audio,
   - risks and blockers
   - open questions
 - PostgreSQL persistence and meeting search
-- Next.js dashboard, upload flow, meeting details, and job-status polling
-- S3-compatible object storage shared by the API and workers
+- Next.js dashboard, upload flow, job polling, and meeting details
+- Same-origin Next.js API proxy so backend addresses and API credentials remain server-side
+- Shared S3-compatible object storage for independently scaled API and worker processes
+- Raw recording deletion after successful processing by default
 - MinIO-backed Docker Compose development environment
-- Terraform definitions for EKS, RDS, ElastiCache, private S3 storage, encryption, retention, and IRSA
-- CI checks for backend lint/tests, API and worker images, frontend production build, Terraform validation, and Compose topology
+- Terraform definitions for EKS, RDS, ElastiCache, private S3 storage, encryption, retention, IAM, and IRSA
+- GitHub OIDC deployment workflow with encrypted remote Terraform state and locking
 
 ## Architecture
 
 ```text
 Browser
+  │ same-origin /api
+  ▼
+Next.js frontend and runtime proxy
   │
   ▼
-Next.js frontend
-  │
-  ▼
-FastAPI API ───────► PostgreSQL
+FastAPI API ─────────────► PostgreSQL
   │
   ├────► S3 / MinIO object storage
   │
@@ -49,7 +51,7 @@ FastAPI API ───────► PostgreSQL
              └────► local or explicitly configured insight provider
 ```
 
-The queue contains an object key rather than a Pod-local file path. This allows independently scaled API and worker Pods to access the same audio through S3-compatible storage.
+Redis contains an object key rather than a Pod-local path. API and worker Pods can therefore scale independently while reading the same audio from S3-compatible storage.
 
 ## Privacy model
 
@@ -57,9 +59,10 @@ The default configuration is:
 
 ```env
 AI_PROVIDER=local
+DELETE_AUDIO_AFTER_PROCESSING=true
 ```
 
-With this setting, the application does not intentionally send transcripts to OpenAI. It uses a configured OpenAI-compatible local endpoint or deterministic local extraction.
+With this configuration, the application does not intentionally send transcripts to OpenAI and removes the raw recording after the worker successfully persists the transcript and structured outcomes. Set `DELETE_AUDIO_AFTER_PROCESSING=false` when raw recording retention is explicitly required; the S3 lifecycle policy remains a secondary expiration control.
 
 To explicitly permit OpenAI processing:
 
@@ -69,16 +72,16 @@ OPENAI_API_KEY=your-key
 OPENAI_MODEL=gpt-4o-mini
 ```
 
-Self-hosting alone does not guarantee compliance. Operators are still responsible for network controls, access policy, encryption, retention, consent, and applicable regulations.
+Self-hosting alone does not establish compliance. Operators remain responsible for consent, access controls, network policy, retention, encryption, auditing, and applicable regulations.
 
 ## Local development
 
 ### Requirements
 
 - Docker with Docker Compose
-- Enough memory to run PostgreSQL, Redis, MinIO, the API, the worker, and faster-whisper
+- Enough memory for PostgreSQL, Redis, MinIO, the API, the worker, and faster-whisper
 
-### Start the application
+### Start
 
 ```bash
 git clone https://github.com/Tonnthe1/Cloud-Native-AI-Meeting-Insights.git
@@ -86,8 +89,6 @@ cd Cloud-Native-AI-Meeting-Insights
 cp .env.example .env
 docker compose up --build
 ```
-
-Default local services:
 
 | Service | Address |
 |---|---|
@@ -99,14 +100,20 @@ Default local services:
 | PostgreSQL | `localhost:5433` |
 | Redis | `localhost:6379` |
 
-Docker Compose configures both the API and worker to use the same MinIO bucket. For a single-process filesystem setup, use:
+Docker Compose configures API and worker to use the same MinIO bucket. For a single-process filesystem setup:
 
 ```env
 STORAGE_BACKEND=local
 STORAGE_LOCAL_DIR=/app/uploads
 ```
 
-## Important environment variables
+When running the frontend outside Compose, point its runtime proxy at the API:
+
+```env
+INTERNAL_API_URL=http://localhost:8000
+```
+
+## Important configuration
 
 ```env
 # AI routing
@@ -128,6 +135,7 @@ S3_ENDPOINT_URL=http://minio:9000
 AWS_REGION=us-east-1
 AWS_ACCESS_KEY_ID=minioadmin
 AWS_SECRET_ACCESS_KEY=change-me-minio
+DELETE_AUDIO_AFTER_PROCESSING=true
 
 # Queue behavior
 MAX_QUEUE_SIZE=100
@@ -135,50 +143,64 @@ MAX_JOB_ATTEMPTS=3
 JOB_TTL_SECONDS=86400
 ```
 
-Use a multilingual faster-whisper model such as `small`, `medium`, or `large-v3` when processing non-English meetings.
+Use a multilingual faster-whisper model such as `small`, `medium`, or `large-v3` for non-English meetings.
 
 ## Validation
 
-GitHub Actions currently checks:
+GitHub Actions checks:
 
 ```text
 flake8
-pytest
-API Docker build
-worker Docker build
+backend unit tests
+PostgreSQL + Redis + MinIO pipeline integration test
+real MinIO object round trip
+API Docker image build
+worker Docker image build
 Next.js production build
 terraform fmt
 terraform init -backend=false
 terraform validate
 docker compose config
-bash syntax for infra/deploy.sh
+deployment shell syntax
 ```
 
-Run the main local checks with:
+The pipeline integration test covers:
 
-```bash
-cd backend
-python -m pytest -q
-cd ../frontend
-npm ci
-npm run build
+```text
+FastAPI upload
+  → MinIO object
+  → Redis queue
+  → worker processing
+  → structured insights
+  → PostgreSQL persistence
+  → raw audio cleanup
 ```
+
+Whisper is replaced with a deterministic transcription fixture in that CI test so it does not download a model. A real-audio Whisper benchmark remains separate work.
 
 ## AWS infrastructure
 
-Terraform provisions:
+Terraform defines:
 
 - VPC with public and private subnets
 - EKS cluster and managed node group
 - RDS PostgreSQL
 - ElastiCache Redis
-- private S3 bucket for uploaded meeting audio
-- server-side encryption and configurable audio expiration
-- least-privilege IAM policy
-- IRSA-enabled API and worker service accounts
-- Kubernetes database credential secret
+- private encrypted S3 bucket with public access blocked
+- configurable S3 lifecycle expiration
+- least-privilege runtime and controller IAM policies
+- Secrets Manager database credentials
 
-The deployment helper uses Terraform outputs instead of modifying source manifests in place:
+`infra/deploy.sh` additionally:
+
+- bootstraps an encrypted, versioned S3 Terraform-state bucket
+- creates a DynamoDB state lock table
+- creates and annotates API/worker service accounts for IRSA after EKS exists
+- retrieves database credentials without committing them to manifests
+- installs the AWS Load Balancer Controller
+- builds and pushes API, worker, and frontend images
+- renders manifests from Terraform outputs without editing tracked files
+- deploys one same-origin frontend ingress while the API remains internal
 
 ```bash
 cd infra
@@ -189,34 +211,52 @@ cd infra
 ./deploy.sh deploy
 ```
 
-Or run the complete sequence:
+Complete sequence:
 
 ```bash
 cd infra
 ./deploy.sh all
 ```
 
-An AWS deployment has not yet been executed and benchmarked as part of this repository's automated validation. Review AWS cost, Terraform state management, DNS, TLS, and production security settings before applying.
+The guarded convenience wrapper requires explicit cost confirmation:
+
+```bash
+cd infra
+CONFIRM_DEPLOY=yes ./one-click-deploy.sh
+```
+
+### GitHub deployment
+
+The manual `Deploy to AWS EKS` workflow uses GitHub OIDC rather than stored AWS access keys. Configure environment secrets:
+
+- `AWS_DEPLOY_ROLE_ARN` — role trusted by the repository's GitHub OIDC subject
+- `TF_STATE_BUCKET` — optional preselected state bucket; a deterministic private bucket is otherwise bootstrapped
+- `API_KEY` — optional application API key
+- `OPENAI_API_KEY` — only when `AI_PROVIDER=openai` is intentionally enabled
+
+Use protected GitHub environments for staging and production approvals.
+
+A live AWS apply has not yet been executed by CI. Review account permissions, cost, DNS, TLS, scaling, backup, and production security settings before applying.
 
 ## Current limitations
 
-- No published real-audio end-to-end benchmark yet
+- No published real-audio Whisper benchmark yet
 - No verified throughput, p95 latency, uptime, or cache-hit-rate claims
 - Human editing of extracted outcomes is not implemented yet
 - User accounts, workspaces, RBAC, and audit logs are not implemented yet
 - GitHub, Jira, Slack, and Confluence exports are planned rather than complete
-- Ray and Triton assets are experimental and are not part of the default processing path
-- The default local heuristic extractor is intentionally simpler than an LLM
+- Ray and Triton assets are experimental and are not part of the default path
+- The deterministic local extractor is intentionally simpler than an LLM
 
-See [`docs/PRODUCT_BLUEPRINT.md`](docs/PRODUCT_BLUEPRINT.md) for the product direction and implementation priorities.
+See [`docs/PRODUCT_BLUEPRINT.md`](docs/PRODUCT_BLUEPRINT.md) for product direction and implementation priorities.
 
-## Development roadmap
+## Roadmap
 
-1. Real audio integration test covering API → object storage → Redis → worker → database
+1. Real speech fixtures and reproducible Whisper quality/latency benchmarks
 2. Human review and editing for decisions and action items
 3. Authentication, workspaces, RBAC, retention controls, and audit events
 4. GitHub/Jira/Slack/Confluence exports
-5. Reproducible multilingual and load benchmarks
+5. Multilingual and load benchmarks with published methodology
 6. Distributed inference only after profiling demonstrates a real bottleneck
 
 ## License
