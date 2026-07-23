@@ -35,6 +35,10 @@ resource "aws_s3_bucket_lifecycle_configuration" "meeting_audio" {
     id     = "expire-meeting-audio"
     status = "Enabled"
 
+    filter {
+      prefix = "meetings/"
+    }
+
     expiration {
       days = var.audio_retention_days
     }
@@ -102,4 +106,18 @@ resource "kubernetes_service_account_v1" "worker" {
       "eks.amazonaws.com/role-arn" = module.secrets_manager_irsa_role.iam_role_arn
     }
   }
+}
+
+resource "kubernetes_secret_v1" "db_credentials" {
+  metadata {
+    name      = "db-credentials"
+    namespace = kubernetes_namespace_v1.meeting_insights.metadata[0].name
+  }
+
+  data = {
+    username = var.db_username
+    password = random_password.db_password.result
+  }
+
+  type = "Opaque"
 }
