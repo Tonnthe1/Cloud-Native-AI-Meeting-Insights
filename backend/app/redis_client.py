@@ -39,8 +39,12 @@ class TaskQueue:
         self.max_queue_size = int(os.getenv("MAX_QUEUE_SIZE", "100"))
         self.job_ttl_seconds = int(os.getenv("JOB_TTL_SECONDS", "86400"))
 
-    def enqueue_meeting_job(self, meeting_id: int, file_path: str,
-                            filename: str) -> str:
+    def enqueue_meeting_job(
+        self,
+        meeting_id: int,
+        object_key: str,
+        filename: str,
+    ) -> str:
         if self.get_queue_length() >= self.max_queue_size:
             raise QueueFullError(
                 f"Processing queue is full ({self.max_queue_size} jobs)"
@@ -50,7 +54,7 @@ class TaskQueue:
         job_data = {
             "id": f"meeting_{meeting_id}_{timestamp}",
             "meeting_id": meeting_id,
-            "file_path": file_path,
+            "object_key": object_key,
             "filename": filename,
             "status": "queued",
             "created_at": datetime.now(timezone.utc).isoformat(),
@@ -80,8 +84,11 @@ class TaskQueue:
             pipe.execute()
         return job_data
 
-    def complete_job(self, job_id: str,
-                     result_data: Optional[Dict[str, Any]] = None) -> None:
+    def complete_job(
+        self,
+        job_id: str,
+        result_data: Optional[Dict[str, Any]] = None,
+    ) -> None:
         job_data = self.get_job_status(job_id)
         if not job_data:
             return
@@ -95,8 +102,12 @@ class TaskQueue:
             pipe.setex(f"job:{job_id}", 3600, json.dumps(job_data))
             pipe.execute()
 
-    def fail_job(self, job_id: str, error_message: str,
-                 retry: bool = True) -> None:
+    def fail_job(
+        self,
+        job_id: str,
+        error_message: str,
+        retry: bool = True,
+    ) -> None:
         job_data = self.get_job_status(job_id)
         if not job_data:
             return
