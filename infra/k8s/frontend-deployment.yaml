@@ -17,12 +17,19 @@ spec:
     spec:
       containers:
       - name: frontend
-        image: meeting-insights-frontend:latest  # Replace with your ECR image
+        image: meeting-insights-frontend:latest
         ports:
         - containerPort: 3000
         envFrom:
         - configMapRef:
             name: meeting-insights-frontend-config
+        env:
+        - name: API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: meeting-insights-secrets
+              key: API_KEY
+              optional: true
         resources:
           requests:
             memory: "128Mi"
