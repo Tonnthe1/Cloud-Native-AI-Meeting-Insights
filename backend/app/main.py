@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import subprocess
 import uuid
@@ -24,12 +25,18 @@ from app.redis_client import (
     get_redis_client,
 )
 from app.schemas import MeetingDetail, MeetingListItem, StructuredInsights
-from app.storage import ObjectStore, build_object_key, get_object_store
+from app.storage import (
+    ObjectStore,
+    build_object_key,
+    get_object_store,
+    should_delete_audio_after_processing,
+)
 from app.util import extract_keywords, get_audio_duration_seconds
 
 load_dotenv()
 load_dotenv(".env.local", override=True)
 
+logger = logging.getLogger(__name__)
 _task_queue: Optional[TaskQueue] = None
 _cache_service: Optional[CacheService] = None
 _object_store: Optional[ObjectStore] = None
@@ -43,7 +50,7 @@ async def lifespan(_: FastAPI):
         from app.migrations.migrate import run_migrations
         run_migrations()
     except Exception as exc:
-        print(f"Warning: migration failed: {exc}")
+        logger.warning("Database migration failed: %s", exc)
 
     _object_store = get_object_store()
 
@@ -55,7 +62,7 @@ async def lifespan(_: FastAPI):
         await cache_client.ping()
         _cache_service = CacheService(cache_client)
     except Exception as exc:
-        print(f"Warning: Redis unavailable: {exc}")
+        logger.warning("Redis unavailable: %s", exc)
         _task_queue = None
         _cache_service = None
 
@@ -117,6 +124,34 @@ def _store_upload(file: UploadFile) -> str:
     object_key = build_object_key(file.filename or "meeting-audio")
     _require_object_store().put_fileobj(file.file, object_key, file.content_type)
     return object_key
+
+
+def _delete_audio_after_success(meeting: Meeting, db: Session) -> None:
+    object_key = meeting.audio_object_key
+    if not object_key or not should_delete_audio_after_processing():
+        return
+    try:
+        _require_object_store().delete(object_key)
+        meeting.audio_object_key = None
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        logger.warning(
+            "Meeting %s completed but raw audio cleanup failed for %s: %s",
+            meeting.id,
+            object_key,
+            exc,
+        )
+
+
+def _mark_upload_failed(meeting: Meeting, object_key: str, db: Session) -> None:
+    try:
+        _require_object_store().delete(object_key)
+        meeting.audio_object_key = None
+    except Exception as exc:
+        logger.warning("Failed to clean rejected upload %s: %s", object_key, exc)
+    meeting.processing_status = "failed"
+    db.commit()
 
 
 def _split_keywords(value: Optional[str]) -> Optional[List[str]]:
@@ -185,6 +220,7 @@ def _process_synchronously(meeting: Meeting, object_key: str, db: Session) -> No
             meeting.duration_seconds = get_audio_duration_seconds(str(file_path))
             meeting.keywords = ",".join(extract_keywords(transcript, top_k=8)) or None
             db.commit()
+            _delete_audio_after_success(meeting, db)
         except Exception:
             meeting.processing_status = "failed"
             db.commit()
@@ -201,6 +237,7 @@ def health_check():
         "cache_available": _cache_service is not None,
         "storage_available": _object_store is not None,
         "storage_backend": os.getenv("STORAGE_BACKEND", "local"),
+        "delete_audio_after_processing": should_delete_audio_after_processing(),
         "ai_provider": os.getenv("AI_PROVIDER", "local"),
     }
 
@@ -218,6 +255,7 @@ async def analyze_meeting(
     object_key = _store_upload(file)
     meeting = Meeting(
         filename=os.path.basename(file.filename or Path(object_key).name),
+        audio_object_key=object_key,
         transcript="",
         summary="",
         processing_status="queued",
@@ -243,15 +281,11 @@ async def analyze_meeting(
                 "message": "Meeting queued for processing",
             }
         except QueueFullError as exc:
-            meeting.processing_status = "failed"
-            db.commit()
-            _require_object_store().delete(object_key)
+            _mark_upload_failed(meeting, object_key, db)
             raise HTTPException(status_code=429, detail=str(exc)) from exc
 
     if os.getenv("ALLOW_SYNC_FALLBACK", "false").lower() != "true":
-        meeting.processing_status = "failed"
-        db.commit()
-        _require_object_store().delete(object_key)
+        _mark_upload_failed(meeting, object_key, db)
         raise HTTPException(
             status_code=503,
             detail="Worker queue unavailable and synchronous fallback is disabled",
@@ -329,6 +363,16 @@ async def delete_meeting(
     meeting = db.get(Meeting, meeting_id)
     if not meeting:
         raise HTTPException(status_code=404, detail="Meeting not found")
+
+    if meeting.audio_object_key:
+        try:
+            _require_object_store().delete(meeting.audio_object_key)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=503,
+                detail="Unable to delete stored meeting audio",
+            ) from exc
+
     db.delete(meeting)
     db.commit()
     if _cache_service:
