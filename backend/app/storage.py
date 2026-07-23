@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import shutil
 import tempfile
+import time
 import uuid
 from contextlib import contextmanager
 from pathlib import Path
@@ -12,7 +13,7 @@ from typing import BinaryIO, Iterator, Optional
 
 import boto3
 from botocore.client import BaseClient
-from botocore.exceptions import ClientError
+from botocore.exceptions import ClientError, EndpointConnectionError
 
 
 class ObjectStore:
@@ -86,24 +87,49 @@ class S3ObjectStore(ObjectStore):
         self._ensure_bucket()
 
     def _ensure_bucket(self) -> None:
-        try:
-            self.client.head_bucket(Bucket=self.bucket)
-            return
-        except ClientError as exc:
-            status_code = exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
-            error_code = exc.response.get("Error", {}).get("Code")
-            if status_code not in {403, 404} and error_code not in {
-                "404",
-                "NoSuchBucket",
-                "NotFound",
-            }:
-                raise
+        attempts = int(os.getenv("S3_STARTUP_ATTEMPTS", "10"))
+        delay_seconds = float(os.getenv("S3_STARTUP_DELAY_SECONDS", "1"))
+        last_error: Optional[Exception] = None
 
-        region = os.getenv("AWS_REGION", "us-east-1")
-        kwargs = {"Bucket": self.bucket}
-        if region != "us-east-1" and not os.getenv("S3_ENDPOINT_URL"):
-            kwargs["CreateBucketConfiguration"] = {"LocationConstraint": region}
-        self.client.create_bucket(**kwargs)
+        for attempt in range(attempts):
+            try:
+                self.client.head_bucket(Bucket=self.bucket)
+                return
+            except EndpointConnectionError as exc:
+                last_error = exc
+            except ClientError as exc:
+                status_code = exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
+                error_code = exc.response.get("Error", {}).get("Code")
+                missing = status_code == 404 or error_code in {
+                    "404",
+                    "NoSuchBucket",
+                    "NotFound",
+                }
+                if not missing:
+                    raise
+                try:
+                    region = os.getenv("AWS_REGION", "us-east-1")
+                    kwargs = {"Bucket": self.bucket}
+                    if region != "us-east-1" and not os.getenv("S3_ENDPOINT_URL"):
+                        kwargs["CreateBucketConfiguration"] = {
+                            "LocationConstraint": region
+                        }
+                    self.client.create_bucket(**kwargs)
+                    return
+                except EndpointConnectionError as create_exc:
+                    last_error = create_exc
+                except ClientError as create_exc:
+                    create_code = create_exc.response.get("Error", {}).get("Code")
+                    if create_code == "BucketAlreadyOwnedByYou":
+                        return
+                    raise
+
+            if attempt < attempts - 1:
+                time.sleep(delay_seconds)
+
+        raise RuntimeError(
+            f"Object storage did not become ready after {attempts} attempts"
+        ) from last_error
 
     def put_fileobj(
         self,
@@ -111,13 +137,10 @@ class S3ObjectStore(ObjectStore):
         object_key: str,
         content_type: Optional[str] = None,
     ) -> None:
-        extra_args = {"ContentType": content_type} if content_type else None
-        self.client.upload_fileobj(
-            fileobj,
-            self.bucket,
-            object_key,
-            ExtraArgs=extra_args,
-        )
+        kwargs = {}
+        if content_type:
+            kwargs["ExtraArgs"] = {"ContentType": content_type}
+        self.client.upload_fileobj(fileobj, self.bucket, object_key, **kwargs)
 
     def download(self, object_key: str, destination: Path) -> None:
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -129,7 +152,8 @@ class S3ObjectStore(ObjectStore):
 
 def build_object_key(filename: str) -> str:
     suffix = Path(filename).suffix.lower()
-    if len(suffix) > 12 or any(character not in ".abcdefghijklmnopqrstuvwxyz0123456789" for character in suffix):
+    allowed = ".abcdefghijklmnopqrstuvwxyz0123456789"
+    if len(suffix) > 12 or any(character not in allowed for character in suffix):
         suffix = ""
     return f"meetings/{uuid.uuid4().hex}{suffix}"
 
@@ -137,17 +161,27 @@ def build_object_key(filename: str) -> str:
 def get_object_store() -> ObjectStore:
     backend = os.getenv("STORAGE_BACKEND", "local").strip().lower()
     if backend == "local":
-        root = Path(os.getenv("STORAGE_LOCAL_DIR", os.getenv("UPLOAD_DIR", "/app/uploads")))
+        root = Path(
+            os.getenv("STORAGE_LOCAL_DIR", os.getenv("UPLOAD_DIR", "/app/uploads"))
+        )
         return LocalObjectStore(root)
     if backend != "s3":
         raise ValueError(f"Unsupported STORAGE_BACKEND: {backend}")
 
-    bucket = os.getenv("S3_BUCKET", "meeting-insights")
-    client = boto3.client(
-        "s3",
-        endpoint_url=os.getenv("S3_ENDPOINT_URL") or None,
-        region_name=os.getenv("AWS_REGION", "us-east-1"),
-        aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID") or None,
-        aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY") or None,
+    client_kwargs = {
+        "endpoint_url": os.getenv("S3_ENDPOINT_URL") or None,
+        "region_name": os.getenv("AWS_REGION", "us-east-1"),
+    }
+    access_key = os.getenv("AWS_ACCESS_KEY_ID")
+    secret_key = os.getenv("AWS_SECRET_ACCESS_KEY")
+    if access_key and secret_key:
+        client_kwargs.update({
+            "aws_access_key_id": access_key,
+            "aws_secret_access_key": secret_key,
+        })
+
+    client = boto3.client("s3", **client_kwargs)
+    return S3ObjectStore(
+        bucket=os.getenv("S3_BUCKET", "meeting-insights"),
+        client=client,
     )
-    return S3ObjectStore(bucket=bucket, client=client)
