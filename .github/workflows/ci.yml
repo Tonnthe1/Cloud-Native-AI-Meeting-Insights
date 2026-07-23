@@ -18,7 +18,21 @@ jobs:
       - name: Install backend dependencies
         run: pip install --quiet -r backend/requirements.txt flake8
       - name: Lint backend
-        run: flake8 backend/app backend/tests --ignore=E501,W503 --show-source --statistics
+        id: backend-lint
+        continue-on-error: true
+        run: flake8 backend/app backend/tests --ignore=E501,W503 --show-source --statistics > backend-lint.log 2>&1
+      - name: Upload backend lint diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-lint-diagnostics
+          path: backend-lint.log
+          if-no-files-found: error
+      - name: Enforce backend lint
+        if: steps.backend-lint.outcome == 'failure'
+        run: |
+          cat backend-lint.log
+          exit 1
       - name: Test backend
         working-directory: backend
         run: pytest -q
@@ -40,7 +54,21 @@ jobs:
         working-directory: frontend
         run: npm ci --silent
       - name: Build frontend
+        id: frontend-build
+        continue-on-error: true
         working-directory: frontend
         env:
           NEXT_PUBLIC_API_URL: http://localhost:8000
-        run: npm run build
+        run: npm run build > ../frontend-build.log 2>&1
+      - name: Upload frontend build diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-build-diagnostics
+          path: frontend-build.log
+          if-no-files-found: error
+      - name: Enforce frontend build
+        if: steps.frontend-build.outcome == 'failure'
+        run: |
+          cat frontend-build.log
+          exit 1
