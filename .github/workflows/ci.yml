@@ -34,8 +34,24 @@ jobs:
           cat backend-lint.log
           exit 1
       - name: Test backend
+        id: backend-test
+        continue-on-error: true
         working-directory: backend
-        run: pytest -q
+        env:
+          PYTHONPATH: .
+        run: python -m pytest -q > ../backend-pytest.log 2>&1
+      - name: Upload backend test diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-pytest-diagnostics
+          path: backend-pytest.log
+          if-no-files-found: error
+      - name: Enforce backend tests
+        if: steps.backend-test.outcome == 'failure'
+        run: |
+          cat backend-pytest.log
+          exit 1
       - name: Build backend images
         run: |
           docker build -t meeting-insights-api ./backend
