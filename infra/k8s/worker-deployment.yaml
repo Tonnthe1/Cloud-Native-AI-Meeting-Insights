@@ -6,7 +6,7 @@ metadata:
   labels:
     app: meeting-insights-worker
 spec:
-  replicas: 1  # Can be scaled based on workload
+  replicas: 1
   selector:
     matchLabels:
       app: meeting-insights-worker
@@ -18,7 +18,7 @@ spec:
       serviceAccountName: meeting-insights-worker
       containers:
       - name: worker
-        image: meeting-insights-worker:latest  # Replace with your ECR image
+        image: meeting-insights-worker:latest
         ports:
         - containerPort: 8001
         env:
@@ -37,12 +37,13 @@ spec:
             secretKeyRef:
               name: meeting-insights-secrets
               key: OPENAI_API_KEY
+              optional: true
         envFrom:
         - configMapRef:
             name: meeting-insights-config
         resources:
           requests:
-            memory: "1Gi"     # Higher memory for transcription
+            memory: "1Gi"
             cpu: "500m"
           limits:
             memory: "2Gi"
@@ -59,13 +60,6 @@ spec:
             port: 8001
           initialDelaySeconds: 10
           periodSeconds: 10
-        volumeMounts:
-        - name: uploads
-          mountPath: /app/uploads
-          readOnly: true
-      volumes:
-      - name: uploads
-        emptyDir: {}
 ---
 apiVersion: v1
 kind: Service
