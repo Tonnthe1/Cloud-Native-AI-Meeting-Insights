@@ -4,6 +4,8 @@ interface RouteContext {
   params: Promise<{ path: string[] }>;
 }
 
+type StreamingRequestInit = RequestInit & { duplex?: "half" };
+
 const INTERNAL_API_URL = (
   process.env.INTERNAL_API_URL || "http://backend-api:8000"
 ).replace(/\/$/, "");
@@ -25,14 +27,18 @@ async function proxy(request: NextRequest, context: RouteContext) {
   }
 
   const hasBody = !["GET", "HEAD"].includes(request.method);
-  const response = await fetch(targetUrl, {
+  const requestInit: StreamingRequestInit = {
     method: request.method,
     headers,
-    body: hasBody ? await request.arrayBuffer() : undefined,
+    body: hasBody ? request.body : undefined,
     redirect: "manual",
     cache: "no-store",
-  });
+  };
+  if (hasBody) {
+    requestInit.duplex = "half";
+  }
 
+  const response = await fetch(targetUrl, requestInit);
   const responseHeaders = new Headers(response.headers);
   responseHeaders.delete("content-encoding");
   responseHeaders.delete("content-length");
