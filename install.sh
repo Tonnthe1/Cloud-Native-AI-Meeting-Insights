@@ -5,6 +5,8 @@ set -euo pipefail
 REPOSITORY_URL=${MEETING_INSIGHTS_REPOSITORY_URL:-https://github.com/Tonnthe1/Cloud-Native-AI-Meeting-Insights.git}
 INSTALL_DIR=${MEETING_INSIGHTS_INSTALL_DIR:-${HOME}/meeting-insights}
 REF=${MEETING_INSIGHTS_REF:-main}
+MEETING_INSIGHTS_PREBUILT=${MEETING_INSIGHTS_PREBUILT:-true}
+export MEETING_INSIGHTS_PREBUILT
 
 log() {
   printf '[meeting-insights-installer] %s\n' "$*"
@@ -31,8 +33,7 @@ else
   log "Using existing checkout at ${INSTALL_DIR}."
   if [[ -z "$(git -C "${INSTALL_DIR}" status --porcelain)" ]]; then
     git -C "${INSTALL_DIR}" fetch --depth 1 origin "${REF}"
-    git -C "${INSTALL_DIR}" checkout --quiet "${REF}"
-    git -C "${INSTALL_DIR}" reset --hard "origin/${REF}"
+    git -C "${INSTALL_DIR}" checkout --quiet --detach FETCH_HEAD
   else
     log "Checkout has local changes; leaving them untouched."
   fi
