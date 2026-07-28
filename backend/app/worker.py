@@ -10,11 +10,9 @@ import sys
 import threading
 import time
 import traceback
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from fastapi import FastAPI
 from faster_whisper import WhisperModel
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -36,12 +34,12 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+READY_FILE = Path(os.getenv("WORKER_READY_FILE", "/tmp/meeting-worker-ready"))
 _fw_model: Optional[WhisperModel] = None
 _task_queue: Optional[TaskQueue] = None
 _object_store: Optional[ObjectStore] = None
 _worker_running = False
 _worker_thread: Optional[threading.Thread] = None
-app = FastAPI(title="Meeting Processing Worker")
 
 
 def load_whisper_model() -> None:
@@ -237,6 +235,7 @@ def start_worker() -> None:
 def stop_worker() -> None:
     global _worker_running
     _worker_running = False
+    READY_FILE.unlink(missing_ok=True)
     if _worker_thread:
         _worker_thread.join(timeout=30)
 
@@ -247,38 +246,16 @@ def signal_handler(signum, _frame) -> None:
     sys.exit(0)
 
 
-@app.get("/health")
-def health_check() -> Dict[str, Any]:
-    health: Dict[str, Any] = {
-        "status": "healthy",
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "worker_running": _worker_running,
-        "model_loaded": _fw_model is not None,
-        "storage_connected": _object_store is not None,
-        "storage_backend": os.getenv("STORAGE_BACKEND", "local"),
-        "delete_audio_after_processing": should_delete_audio_after_processing(),
-        "redis_connected": False,
-    }
-    try:
-        if _task_queue:
-            _task_queue.redis.ping()
-            health.update({
-                "redis_connected": True,
-                "queue_length": _task_queue.get_queue_length(),
-                "processing_count": _task_queue.get_processing_count(),
-            })
-    except Exception as exc:
-        health.update({"status": "unhealthy", "redis_error": str(exc)})
-    return health
-
-
 def main() -> None:
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
+    READY_FILE.unlink(missing_ok=True)
     try:
         initialize_services()
         load_whisper_model()
         start_worker()
+        READY_FILE.write_text("ready\n", encoding="utf-8")
+        logger.info("Worker is ready")
         while _worker_running:
             time.sleep(1)
     except Exception as exc:
