@@ -7,6 +7,9 @@ ROOT_DIR=$(cd "${SCRIPT_DIR}/.." && pwd)
 ENV_FILE="${ROOT_DIR}/.env"
 COMMAND=${1:-up}
 WAIT_TIMEOUT_SECONDS=${WAIT_TIMEOUT_SECONDS:-1200}
+MEETING_INSIGHTS_PREBUILT=${MEETING_INSIGHTS_PREBUILT:-false}
+MEETING_INSIGHTS_VERSION=${MEETING_INSIGHTS_VERSION:-latest}
+MEETING_INSIGHTS_IMAGE_PREFIX=${MEETING_INSIGHTS_IMAGE_PREFIX:-ghcr.io/tonnthe1}
 
 log() {
   printf '[meeting-insights] %s\n' "$*"
@@ -18,7 +21,7 @@ fail() {
 }
 
 compose() {
-  docker compose --project-directory "${ROOT_DIR}" "$@"
+  (cd "${ROOT_DIR}" && docker compose "$@")
 }
 
 require_docker() {
@@ -104,6 +107,16 @@ EOF
   log "Created .env with generated local secrets."
 }
 
+set_published_images() {
+  export API_IMAGE="${MEETING_INSIGHTS_IMAGE_PREFIX}/meeting-insights-api:${MEETING_INSIGHTS_VERSION}"
+  export WORKER_IMAGE="${MEETING_INSIGHTS_IMAGE_PREFIX}/meeting-insights-worker:${MEETING_INSIGHTS_VERSION}"
+  export FRONTEND_IMAGE="${MEETING_INSIGHTS_IMAGE_PREFIX}/meeting-insights-frontend:${MEETING_INSIGHTS_VERSION}"
+}
+
+clear_published_images() {
+  unset API_IMAGE WORKER_IMAGE FRONTEND_IMAGE
+}
+
 container_health() {
   local service=$1 container_id
   container_id=$(compose ps -q "${service}")
@@ -162,13 +175,28 @@ Useful commands:
 EOF
 }
 
+start_stack() {
+  if [[ "${MEETING_INSIGHTS_PREBUILT}" == "true" || "${MEETING_INSIGHTS_PREBUILT}" == "1" ]]; then
+    set_published_images
+    log "Pulling published images (${MEETING_INSIGHTS_VERSION})."
+    if compose pull backend-api backend-worker frontend; then
+      compose up --detach --no-build --remove-orphans
+      return
+    fi
+    log "Published images were unavailable; falling back to a source build."
+    clear_published_images
+  fi
+
+  log "Building images from the checked-out source."
+  compose up --detach --build --remove-orphans
+}
+
 up() {
   require_docker
   create_env
   log "Validating Docker Compose configuration."
   compose config --quiet
-  log "Building and starting the self-hosted stack."
-  compose up --detach --build --remove-orphans
+  start_stack
   wait_for_service backend-api 300
   wait_for_service frontend 300
   wait_for_service backend-worker "${WAIT_TIMEOUT_SECONDS}"
@@ -206,6 +234,9 @@ reset() {
 doctor() {
   require_docker
   create_env
+  if [[ "${MEETING_INSIGHTS_PREBUILT}" == "true" || "${MEETING_INSIGHTS_PREBUILT}" == "1" ]]; then
+    set_published_images
+  fi
   compose config --quiet
   log "Docker, Compose, environment configuration, and service topology look valid."
 }
