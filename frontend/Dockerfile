@@ -1,7 +1,6 @@
 FROM node:20-alpine
 
-ENV NODE_ENV=production \
-    NEXT_TELEMETRY_DISABLED=1
+ENV NEXT_TELEMETRY_DISABLED=1
 
 WORKDIR /app
 
@@ -10,8 +9,10 @@ RUN npm ci
 
 COPY . .
 RUN npm run build \
+    && npm prune --omit=dev \
     && chown -R node:node /app
 
+ENV NODE_ENV=production
 USER node
 EXPOSE 3000
 
