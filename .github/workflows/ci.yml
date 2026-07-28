@@ -131,6 +131,8 @@ jobs:
         run: |
           cat frontend-build.log
           exit 1
+      - name: Build frontend image
+        run: docker build -t meeting-insights-frontend ./frontend
 
   infrastructure:
     runs-on: ubuntu-latest
@@ -165,9 +167,9 @@ jobs:
       - name: Validate Terraform
         working-directory: infra/terraform
         run: terraform validate
-      - name: Validate deployment script syntax
-        run: bash -n infra/deploy.sh infra/one-click-deploy.sh
-      - name: Validate Docker Compose topology
+      - name: Validate deployment and quickstart scripts
+        run: bash -n infra/deploy.sh infra/one-click-deploy.sh scripts/quickstart.sh
+      - name: Validate one-command self-host topology
         run: |
           cp .env.example .env
-          docker compose config --quiet
+          bash scripts/quickstart.sh doctor
