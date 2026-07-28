@@ -1,25 +1,30 @@
-FROM python:3.11
+FROM python:3.11-slim
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    ffmpeg \
-    && rm -rf /var/lib/apt/lists/*
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    HF_HOME=/home/app/.cache/huggingface \
+    WORKER_READY_FILE=/tmp/meeting-worker-ready
 
 WORKDIR /app
 
-# Copy requirements and install Python dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      ca-certificates \
+      ffmpeg \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --system app \
+    && useradd --system --gid app --create-home app \
+    && mkdir -p /home/app/.cache/huggingface \
+    && chown -R app:app /home/app
+
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install -r requirements.txt
 
-# Copy application code
-COPY app/ ./app/
+COPY --chown=app:app app/ ./app/
+COPY --chown=app:app start_worker.sh ./start_worker.sh
+RUN chmod +x ./start_worker.sh
 
-# Make worker executable
-RUN chmod +x app/worker.py
+USER app
+EXPOSE 8001
 
-# Copy startup script
-COPY start_worker.sh .
-RUN chmod +x start_worker.sh
-
-# Run both worker and health server
 CMD ["./start_worker.sh"]
