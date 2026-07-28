@@ -167,9 +167,20 @@ jobs:
       - name: Validate Terraform
         working-directory: infra/terraform
         run: terraform validate
-      - name: Validate deployment and quickstart scripts
-        run: bash -n infra/deploy.sh infra/one-click-deploy.sh scripts/quickstart.sh
-      - name: Validate one-command self-host topology
+      - name: Validate Bash deployment and installer scripts
+        run: bash -n install.sh infra/deploy.sh infra/one-click-deploy.sh scripts/quickstart.sh
+      - name: Validate Bash self-host topology
         run: |
           cp .env.example .env
           bash scripts/quickstart.sh doctor
+      - name: Validate PowerShell scripts
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile("$PWD/install.ps1", [ref]$tokens, [ref]$errors) | Out-Null
+          [System.Management.Automation.Language.Parser]::ParseFile("$PWD/scripts/quickstart.ps1", [ref]$tokens, [ref]$errors) | Out-Null
+          if ($errors.Count -gt 0) {
+            $errors | Format-List | Out-String | Write-Error
+          }
+          ./scripts/quickstart.ps1 doctor
