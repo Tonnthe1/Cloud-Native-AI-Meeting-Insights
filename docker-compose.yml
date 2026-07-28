@@ -57,6 +57,7 @@ services:
     logging: *default-logging
 
   backend-api:
+    image: ${API_IMAGE:-meeting-insights-api:local}
     build:
       context: ./backend
       dockerfile: Dockerfile
@@ -97,6 +98,7 @@ services:
     logging: *default-logging
 
   backend-worker:
+    image: ${WORKER_IMAGE:-meeting-insights-worker:local}
     build:
       context: ./backend
       dockerfile: Dockerfile.worker
@@ -135,6 +137,7 @@ services:
     logging: *default-logging
 
   frontend:
+    image: ${FRONTEND_IMAGE:-meeting-insights-frontend:local}
     build:
       context: ./frontend
       dockerfile: Dockerfile
