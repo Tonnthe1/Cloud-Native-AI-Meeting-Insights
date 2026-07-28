@@ -2,7 +2,7 @@
 
 An MIT-licensed, privacy-first, self-hostable meeting-to-action platform. Upload meeting audio, transcribe it with faster-whisper, and turn the transcript into structured decisions, action items, risks, key points, and open questions.
 
-> **Project status:** the core self-hosted path, container builds, PostgreSQL/Redis/MinIO integration pipeline, and infrastructure definitions are validated in CI. A live production AWS deployment and performance claims are not yet presented as validated.
+> **Project status:** the core self-hosted path, cross-platform installers, container builds, PostgreSQL/Redis/MinIO integration pipeline, and infrastructure definitions are validated in CI. A live production AWS deployment and performance claims are not yet presented as validated.
 
 ## One-command self-hosting
 
@@ -66,6 +66,7 @@ MEETING_INSIGHTS_PREBUILT=false bash scripts/quickstart.sh up
 ## What works today
 
 - audio upload from the Next.js interface
+- streaming upload proxy that does not buffer the full recording in frontend memory
 - asynchronous Redis-backed jobs with queue backpressure and retry limits
 - faster-whisper transcription using multilingual model names such as `small`
 - local deterministic insight extraction by default
@@ -86,7 +87,7 @@ MEETING_INSIGHTS_PREBUILT=false bash scripts/quickstart.sh up
 Browser
   │ same-origin /api
   ▼
-Next.js frontend and runtime proxy
+Next.js frontend and streaming runtime proxy
   │
   ▼
 FastAPI API ─────────────► PostgreSQL
