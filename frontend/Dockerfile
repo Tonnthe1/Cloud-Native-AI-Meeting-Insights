@@ -1,21 +1,18 @@
-FROM node:18-alpine
+FROM node:20-alpine
+
+ENV NODE_ENV=production \
+    NEXT_TELEMETRY_DISABLED=1
 
 WORKDIR /app
 
-# Copy package files
 COPY package*.json ./
-
-# Install dependencies
 RUN npm ci
 
-# Copy source code
 COPY . .
+RUN npm run build \
+    && chown -R node:node /app
 
-# Build the application
-RUN npm run build
-
-# Expose port
+USER node
 EXPOSE 3000
 
-# Start the application
 CMD ["npm", "start"]
