@@ -1,7 +1,7 @@
 # EKS Cluster
 module "eks" {
-  source = "terraform-aws-modules/eks/aws"
-  version = "~> 19.15"
+  source  = "terraform-aws-modules/eks/aws"
+  version = "~> 20.0"
 
   cluster_name    = local.cluster_name
   cluster_version = var.cluster_version
@@ -21,16 +21,16 @@ module "eks" {
       name = "${local.cluster_name}-nodes"
 
       instance_types = var.node_instance_types
-      capacity_type  = "ON_DEMAND"  # Can be changed to SPOT for cost savings
+      capacity_type  = "ON_DEMAND" # Can be changed to SPOT for cost savings
 
       min_size     = var.node_min_capacity
       max_size     = var.node_max_capacity
       desired_size = var.node_desired_capacity
 
       # Node group configuration
-      ami_type       = "AL2_x86_64"
-      disk_size      = 20  # GB - minimum recommended
-      
+      ami_type  = "AL2023_x86_64_STANDARD"
+      disk_size = 20 # GB - minimum recommended
+
       # Labels and taints
       labels = {
         Environment = var.environment
@@ -39,7 +39,7 @@ module "eks" {
 
       # Instance configuration
       remote_access = {
-        ec2_ssh_key = null  # Set to your key pair name if needed
+        ec2_ssh_key               = null # Set to your key pair name if needed
         source_security_group_ids = []
       }
 
@@ -50,14 +50,7 @@ module "eks" {
     }
   }
 
-  # aws-auth configmap
-  manage_aws_auth_configmap = true
-  aws_auth_roles = [
-    # Add additional IAM roles here if needed
-  ]
-  aws_auth_users = [
-    # Add IAM users here if needed
-  ]
+  enable_cluster_creator_admin_permissions = true
 
   tags = merge(var.tags, {
     Environment = var.environment
@@ -79,7 +72,7 @@ resource "aws_security_group_rule" "cluster_ingress_workstation_https" {
 
 # IAM role for EKS service account (for AWS Load Balancer Controller)
 module "load_balancer_controller_irsa_role" {
-  source = "terraform-aws-modules/iam/aws//modules/iam-role-for-service-accounts-eks"
+  source  = "terraform-aws-modules/iam/aws//modules/iam-role-for-service-accounts-eks"
   version = "~> 5.0"
 
   role_name = "${local.cluster_name}-load-balancer-controller"
@@ -98,7 +91,7 @@ module "load_balancer_controller_irsa_role" {
 
 # EBS CSI Driver IRSA role
 module "ebs_csi_irsa_role" {
-  source = "terraform-aws-modules/iam/aws//modules/iam-role-for-service-accounts-eks"
+  source  = "terraform-aws-modules/iam/aws//modules/iam-role-for-service-accounts-eks"
   version = "~> 5.0"
 
   role_name = "${local.cluster_name}-ebs-csi-driver"

@@ -1,134 +1,112 @@
 "use client";
 
-import React, { useState, useRef } from "react";
-import { meetingService } from "@/lib/api";
+import { useRef, useState } from "react";
+import type { ChangeEvent, DragEvent, FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import {
+  ArrowPathIcon,
   CloudArrowUpIcon,
   DocumentIcon,
   ExclamationCircleIcon,
-  CheckCircleIcon,
-  ArrowPathIcon
 } from "@heroicons/react/24/outline";
+
+import { meetingService } from "@/lib/api";
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : "Upload failed";
+}
+
+function formatFileSize(bytes: number): string {
+  if (bytes <= 0) return "0 Bytes";
+  const units = ["Bytes", "KB", "MB", "GB"];
+  const unitIndex = Math.min(
+    Math.floor(Math.log(bytes) / Math.log(1024)),
+    units.length - 1,
+  );
+  const value = bytes / 1024 ** unitIndex;
+  return `${value.toFixed(unitIndex === 0 ? 0 : 2)} ${units[unitIndex]}`;
+}
+
+function isAudioFile(file: File): boolean {
+  return file.type.startsWith("audio/") || /\.(mp3|wav|m4a|aac|flac|ogg|webm)$/i.test(file.name);
+}
 
 export default function UploadPage() {
   const router = useRouter();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [file, setFile] = useState<File | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
   const [dragOver, setDragOver] = useState(false);
-  const [uploadProgress, setUploadProgress] = useState(0);
+  const [error, setError] = useState<string | null>(null);
 
-  const handleDragOver = (e: React.DragEvent) => {
-    e.preventDefault();
-    setDragOver(true);
-  };
-
-  const handleDragLeave = (e: React.DragEvent) => {
-    e.preventDefault();
-    setDragOver(false);
-  };
-
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    setDragOver(false);
-    
-    const droppedFiles = Array.from(e.dataTransfer.files);
-    const audioFile = droppedFiles.find(file => file.type.startsWith('audio/'));
-    
-    if (audioFile) {
-      setFile(audioFile);
-      setError(null);
-    } else {
-      setError("Please drop an audio file");
-    }
-  };
-
-  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const selectedFile = e.target.files?.[0];
-    if (selectedFile) {
-      setFile(selectedFile);
-      setError(null);
-    }
-  };
-
-  const formatFileSize = (bytes: number) => {
-    if (bytes === 0) return '0 Bytes';
-    const k = 1024;
-    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-  };
-
-  const handleUpload = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!file) {
-      setError("Please choose an audio file.");
+  const selectFile = (candidate: File | undefined) => {
+    if (!candidate) return;
+    if (!isAudioFile(candidate)) {
+      setFile(null);
+      setError("Choose a supported audio file.");
       return;
     }
+    setFile(candidate);
+    setError(null);
+  };
 
-    try {
-      setLoading(true);
-      setError(null);
-      setUploadProgress(0);
-      
-      // Simulate upload progress (since we can't get real progress from the API easily)
-      const progressInterval = setInterval(() => {
-        setUploadProgress(prev => {
-          if (prev >= 90) {
-            clearInterval(progressInterval);
-            return 90;
-          }
-          return prev + 10;
-        });
-      }, 200);
-      
-      const result = await meetingService.analyzeMeeting(file);
-      
-      clearInterval(progressInterval);
-      setUploadProgress(100);
-      
-      // Brief delay to show completion
-      setTimeout(() => {
-        router.push("/");
-      }, 1000);
-      
-    } catch (err: any) {
-      setUploadProgress(0);
-      setError(err?.response?.data?.detail || err.message || "Upload failed");
-    } finally {
-      setLoading(false);
-    }
+  const handleDrop = (event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    setDragOver(false);
+    selectFile(Array.from(event.dataTransfer.files).find(isAudioFile));
+  };
+
+  const handleFileSelect = (event: ChangeEvent<HTMLInputElement>) => {
+    selectFile(event.target.files?.[0]);
   };
 
   const removeFile = () => {
     setFile(null);
     setError(null);
-    if (fileInputRef.current) {
-      fileInputRef.current.value = '';
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  };
+
+  const handleUpload = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!file) {
+      setError("Choose an audio file before uploading.");
+      return;
+    }
+
+    setSubmitting(true);
+    setError(null);
+    try {
+      const result = await meetingService.analyzeMeeting(file);
+      router.push(`/meeting/${result.meeting_id}`);
+    } catch (requestError: unknown) {
+      setError(getErrorMessage(requestError));
+      setSubmitting(false);
     }
   };
 
   return (
-    <div className="max-w-2xl mx-auto space-y-6">
-      {/* Header */}
-      <div className="text-center">
+    <div className="mx-auto max-w-2xl space-y-6">
+      <header className="text-center">
         <h1 className="text-3xl font-bold text-gray-900">Upload Meeting Recording</h1>
-        <p className="text-gray-600 mt-2">
-          Upload your audio file to get AI-powered meeting insights including transcription, summary, and key points.
+        <p className="mt-2 text-gray-600">
+          The API stores the recording, queues transcription, and redirects you
+          to the meeting page where processing status and structured outcomes are shown.
         </p>
-      </div>
+      </header>
 
-      {/* Upload Form */}
-      <div className="bg-white rounded-lg border border-gray-200 p-8">
+      <section className="rounded-xl border border-gray-200 bg-white p-8 shadow-sm">
         <form onSubmit={handleUpload} className="space-y-6">
-          {/* File Drop Zone */}
           <div
-            onDragOver={handleDragOver}
-            onDragLeave={handleDragLeave}
+            onDragOver={(event) => {
+              event.preventDefault();
+              setDragOver(true);
+            }}
+            onDragLeave={(event) => {
+              event.preventDefault();
+              setDragOver(false);
+            }}
             onDrop={handleDrop}
-            className={`relative border-2 border-dashed rounded-lg p-8 text-center transition-colors duration-200 ${
+            className={`relative rounded-lg border-2 border-dashed p-8 text-center transition-colors ${
               dragOver
                 ? "border-blue-400 bg-blue-50"
                 : "border-gray-300 hover:border-gray-400"
@@ -137,115 +115,89 @@ export default function UploadPage() {
             <input
               ref={fileInputRef}
               type="file"
-              accept="audio/*"
+              accept="audio/*,.mp3,.wav,.m4a,.aac,.flac,.ogg,.webm"
               onChange={handleFileSelect}
-              disabled={loading}
-              className="absolute inset-0 w-full h-full opacity-0 cursor-pointer disabled:cursor-not-allowed"
+              disabled={submitting}
+              aria-label="Choose meeting audio"
+              className="absolute inset-0 h-full w-full cursor-pointer opacity-0 disabled:cursor-not-allowed"
             />
-            
-            <div className="space-y-4">
-              <div className="mx-auto h-12 w-12 flex items-center justify-center rounded-full bg-gray-100">
-                <CloudArrowUpIcon className="h-6 w-6 text-gray-600" />
-              </div>
-              
-              <div>
-                <p className="text-lg font-medium text-gray-900">
-                  Drop your audio file here, or click to browse
-                </p>
-                <p className="text-sm text-gray-500 mt-1">
-                  Supports MP3, WAV, M4A, and other audio formats
-                </p>
-              </div>
-            </div>
+            <CloudArrowUpIcon className="mx-auto mb-4 h-12 w-12 rounded-full bg-gray-100 p-3 text-gray-600" />
+            <p className="text-lg font-medium text-gray-900">
+              Drop your audio file here, or click to browse
+            </p>
+            <p className="mt-1 text-sm text-gray-500">
+              MP3, WAV, M4A, AAC, FLAC, OGG, and WebM are supported.
+            </p>
           </div>
 
-          {/* Selected File Info */}
-          {file && (
-            <div className="bg-gray-50 rounded-lg p-4">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center space-x-3">
-                  <DocumentIcon className="h-8 w-8 text-blue-600" />
-                  <div>
-                    <p className="font-medium text-gray-900">{file.name}</p>
-                    <p className="text-sm text-gray-500">{formatFileSize(file.size)}</p>
-                  </div>
+          {file ? (
+            <div className="flex items-center justify-between rounded-lg bg-gray-50 p-4">
+              <div className="flex min-w-0 items-center gap-3">
+                <DocumentIcon className="h-8 w-8 shrink-0 text-blue-600" />
+                <div className="min-w-0">
+                  <p className="truncate font-medium text-gray-900">{file.name}</p>
+                  <p className="text-sm text-gray-500">{formatFileSize(file.size)}</p>
                 </div>
-                <button
-                  type="button"
-                  onClick={removeFile}
-                  disabled={loading}
-                  className="text-gray-400 hover:text-red-500 disabled:opacity-50"
-                >
-                  ×
-                </button>
               </div>
+              <button
+                type="button"
+                onClick={removeFile}
+                disabled={submitting}
+                aria-label="Remove selected file"
+                className="rounded px-3 py-1 text-gray-500 hover:bg-white hover:text-red-600 disabled:opacity-50"
+              >
+                Remove
+              </button>
             </div>
-          )}
+          ) : null}
 
-          {/* Upload Progress */}
-          {loading && uploadProgress > 0 && (
-            <div className="space-y-2">
-              <div className="flex justify-between text-sm">
-                <span className="text-gray-600">Processing...</span>
-                <span className="text-gray-600">{uploadProgress}%</span>
-              </div>
-              <div className="w-full bg-gray-200 rounded-full h-2">
-                <div 
-                  className="bg-blue-600 h-2 rounded-full transition-all duration-300 ease-out"
-                  style={{ width: `${uploadProgress}%` }}
-                ></div>
-              </div>
-              <p className="text-sm text-gray-500 text-center">
-                {uploadProgress < 30 && "Uploading file..."}
-                {uploadProgress >= 30 && uploadProgress < 60 && "Transcribing audio..."}
-                {uploadProgress >= 60 && uploadProgress < 90 && "Generating summary..."}
-                {uploadProgress >= 90 && uploadProgress < 100 && "Finishing up..."}
-                {uploadProgress === 100 && "Complete! Redirecting..."}
-              </p>
-            </div>
-          )}
-
-          {/* Error Message */}
-          {error && (
-            <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+          {submitting ? (
+            <div className="rounded-lg border border-blue-200 bg-blue-50 p-4 text-sm text-blue-800">
               <div className="flex items-center">
-                <ExclamationCircleIcon className="h-5 w-5 text-red-600 mr-2" />
-                <span className="text-sm text-red-700">{error}</span>
+                <ArrowPathIcon className="mr-2 h-5 w-5 animate-spin" />
+                Uploading and creating the processing job...
               </div>
             </div>
-          )}
+          ) : null}
 
-          {/* Submit Button */}
+          {error ? (
+            <div className="rounded-lg border border-red-200 bg-red-50 p-4">
+              <div className="flex items-center text-sm text-red-700">
+                <ExclamationCircleIcon className="mr-2 h-5 w-5 shrink-0 text-red-600" />
+                {error}
+              </div>
+            </div>
+          ) : null}
+
           <button
             type="submit"
-            disabled={loading || !file}
-            className="w-full flex items-center justify-center px-4 py-3 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors duration-200"
+            disabled={submitting || !file}
+            className="flex w-full items-center justify-center rounded-lg bg-blue-600 px-4 py-3 text-sm font-medium text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
           >
-            {loading ? (
+            {submitting ? (
               <>
-                <ArrowPathIcon className="animate-spin h-5 w-5 mr-2" />
-                Processing...
+                <ArrowPathIcon className="mr-2 h-5 w-5 animate-spin" />
+                Creating Job...
               </>
             ) : (
               <>
-                <CloudArrowUpIcon className="h-5 w-5 mr-2" />
-                Upload & Analyze
+                <CloudArrowUpIcon className="mr-2 h-5 w-5" />
+                Upload and Analyze
               </>
             )}
           </button>
         </form>
 
-        {/* Tips */}
-        <div className="mt-6 pt-6 border-t border-gray-200">
-          <h3 className="text-sm font-medium text-gray-900 mb-2">Tips for best results:</h3>
-          <ul className="text-sm text-gray-600 space-y-1">
-            <li>• Use clear, high-quality audio recordings</li>
-            <li>• Ensure speakers are audible and not too far from the microphone</li>
-            <li>• Minimize background noise when possible</li>
-            <li>• Supported formats: MP3, WAV, M4A, and most common audio formats</li>
+        <div className="mt-6 border-t border-gray-200 pt-6">
+          <h2 className="mb-2 text-sm font-medium text-gray-900">For better results</h2>
+          <ul className="space-y-1 text-sm text-gray-600">
+            <li>• Use clear audio with limited background noise.</li>
+            <li>• Keep speakers close enough to the microphone.</li>
+            <li>• Use a multilingual Whisper model for non-English meetings.</li>
+            <li>• Keep AI_PROVIDER set to local for private processing.</li>
           </ul>
         </div>
-      </div>
+      </section>
     </div>
   );
 }

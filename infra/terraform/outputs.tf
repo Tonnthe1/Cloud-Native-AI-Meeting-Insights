@@ -1,3 +1,8 @@
+output "aws_region" {
+  description = "AWS region used for the deployment"
+  value       = var.aws_region
+}
+
 # EKS Cluster Outputs
 output "cluster_name" {
   description = "Name of the EKS cluster"
@@ -42,8 +47,8 @@ output "public_subnets" {
 
 # Database Outputs
 output "rds_endpoint" {
-  description = "RDS instance endpoint"
-  value       = aws_db_instance.postgresql.endpoint
+  description = "RDS instance hostname"
+  value       = aws_db_instance.postgresql.address
 }
 
 output "rds_port" {
@@ -61,6 +66,17 @@ output "redis_port" {
   value       = aws_elasticache_replication_group.redis.port
 }
 
+# Object Storage
+output "meeting_audio_bucket" {
+  description = "Private S3 bucket used for uploaded meeting audio"
+  value       = aws_s3_bucket.meeting_audio.id
+}
+
+output "application_runtime_role_arn" {
+  description = "IRSA role used by the API and worker service accounts"
+  value       = module.secrets_manager_irsa_role.iam_role_arn
+}
+
 # Secrets Manager
 output "db_secret_name" {
   description = "Name of the database secret in AWS Secrets Manager"
@@ -74,7 +90,7 @@ output "load_balancer_controller_role_arn" {
 }
 
 output "secrets_manager_role_arn" {
-  description = "ARN of the IAM role for accessing Secrets Manager"
+  description = "Backward-compatible alias for the application runtime role"
   value       = module.secrets_manager_irsa_role.iam_role_arn
 }
 
@@ -83,7 +99,6 @@ output "ebs_csi_role_arn" {
   value       = module.ebs_csi_irsa_role.iam_role_arn
 }
 
-# Kubectl configuration command
 output "configure_kubectl" {
   description = "Configure kubectl to connect to the cluster"
   value       = "aws eks update-kubeconfig --region ${var.aws_region} --name ${module.eks.cluster_name}"

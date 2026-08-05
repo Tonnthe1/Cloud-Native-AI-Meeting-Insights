@@ -3,11 +3,11 @@
 
 # Basic Configuration
 aws_region    = "us-west-2"
-environment   = "dev"
-cluster_name  = "meeting-insights"
+environment           = "dev"
+cluster_name_override = "meeting-insights"
 
 # EKS Configuration
-cluster_version        = "1.28"
+cluster_version        = "1.34"
 node_instance_types    = ["t3.medium"]
 node_desired_capacity  = 2
 node_max_capacity      = 4

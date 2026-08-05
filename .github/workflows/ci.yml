@@ -1,37 +1,260 @@
-name: Backend CI
+name: CI
 
 on:
   push:
     branches: [main]
   pull_request:
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  backend-test:
+  backend:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-
-      - name: Set up Python
-        uses: actions/setup-python@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
-
-      - name: Install dependencies
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements-dev.txt
+      - name: Install backend dependencies
         run: |
-          cd backend
-          pip install -r requirements.txt
-
-      - name: Lint (flake8)
+          python -m pip install --upgrade pip setuptools
+          python -m pip install --quiet -r backend/requirements-dev.txt
+      - name: Audit production Python dependencies
+        run: pip-audit -r backend/requirements.txt
+      - name: Lint backend
+        id: backend-lint
+        continue-on-error: true
+        run: flake8 backend/app backend/tests --ignore=E501,W503 --show-source --statistics > backend-lint.log 2>&1
+      - name: Upload backend lint diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-lint-diagnostics
+          path: backend-lint.log
+          if-no-files-found: error
+      - name: Enforce backend lint
+        if: steps.backend-lint.outcome == 'failure'
         run: |
-          cd backend
-          pip install flake8
-          flake8 .
-
-      - name: Run tests (pytest)
+          cat backend-lint.log
+          exit 1
+      - name: Test backend units
+        id: backend-test
+        continue-on-error: true
+        working-directory: backend
+        env:
+          PYTHONPATH: .
+        run: python -m pytest -q > ../backend-pytest.log 2>&1
+      - name: Upload backend test diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-pytest-diagnostics
+          path: backend-pytest.log
+          if-no-files-found: error
+      - name: Enforce backend tests
+        if: steps.backend-test.outcome == 'failure'
         run: |
-          cd backend
-          pytest || echo "no tests yet"
-
-      - name: Build Docker image
+          cat backend-pytest.log
+          exit 1
+      - name: Test API queue worker database and object storage pipeline
+        working-directory: backend
+        env:
+          PYTHONPATH: .
+          RUN_STORAGE_INTEGRATION: "1"
+          RUN_PIPELINE_INTEGRATION: "1"
+          POSTGRES_USER: meetinguser
+          POSTGRES_PASSWORD: integration-password
+          POSTGRES_DB: meeting_insights
+          POSTGRES_HOST: localhost
+          POSTGRES_PORT: "5432"
+          REDIS_HOST: localhost
+          REDIS_PORT: "6379"
+          REDIS_DB: "0"
+          STORAGE_BACKEND: s3
+          S3_BUCKET: ci-meeting-insights
+          S3_ENDPOINT_URL: http://localhost:9000
+          AWS_REGION: us-east-1
+          AWS_ACCESS_KEY_ID: minioadmin
+          AWS_SECRET_ACCESS_KEY: minio-ci-password
+          API_KEY: integration-api-key
+          S3_STARTUP_ATTEMPTS: "20"
+          S3_STARTUP_DELAY_SECONDS: "1"
+          AI_PROVIDER: local
         run: |
-          docker build -t meeting-backend ./backend
+          docker run -d --name ci-postgres -p 5432:5432 \
+            -e POSTGRES_USER=meetinguser \
+            -e POSTGRES_PASSWORD=integration-password \
+            -e POSTGRES_DB=meeting_insights \
+            pgvector/pgvector:pg16
+          docker run -d --name ci-redis -p 6379:6379 redis:7-alpine
+          docker run -d --name ci-minio -p 9000:9000 \
+            -e MINIO_ROOT_USER=minioadmin \
+            -e MINIO_ROOT_PASSWORD=minio-ci-password \
+            minio/minio:RELEASE.2025-04-22T22-12-26Z server /data
+
+          until docker exec ci-postgres pg_isready -U meetinguser -d meeting_insights; do sleep 1; done
+          until test "$(docker exec ci-redis redis-cli ping)" = "PONG"; do sleep 1; done
+
+          python -m pytest -q \
+            tests/test_storage_integration.py \
+            tests/test_pipeline_integration.py
+      - name: Build backend images
+        run: |
+          docker build -t meeting-insights-api ./backend
+          docker build -f backend/Dockerfile.worker -t meeting-insights-worker ./backend
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci --silent
+      - name: Audit production frontend dependencies
+        working-directory: frontend
+        run: npm audit --omit=dev --audit-level=high
+      - name: Lint frontend
+        working-directory: frontend
+        run: npm run lint
+      - name: Build frontend
+        id: frontend-build
+        continue-on-error: true
+        working-directory: frontend
+        run: npm run build > ../frontend-build.log 2>&1
+      - name: Upload frontend build diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-build-diagnostics
+          path: frontend-build.log
+          if-no-files-found: error
+      - name: Enforce frontend build
+        if: steps.frontend-build.outcome == 'failure'
+        run: |
+          cat frontend-build.log
+          exit 1
+      - name: Build frontend image
+        run: docker build -t meeting-insights-frontend ./frontend
+
+  infrastructure:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.6.6
+      - name: Check Terraform formatting
+        id: terraform-format
+        continue-on-error: true
+        working-directory: infra/terraform
+        run: |
+          terraform fmt -recursive
+          git diff -- . > ../../terraform-fmt.patch
+          test ! -s ../../terraform-fmt.patch
+      - name: Upload Terraform formatting diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-format-diagnostics
+          path: terraform-fmt.patch
+          if-no-files-found: error
+      - name: Enforce Terraform formatting
+        if: steps.terraform-format.outcome == 'failure'
+        run: |
+          cat terraform-fmt.patch
+          exit 1
+      - name: Initialize Terraform modules
+        working-directory: infra/terraform
+        run: terraform init -backend=false -lockfile=readonly
+      - name: Validate Terraform
+        working-directory: infra/terraform
+        run: terraform validate
+      - name: Validate Bash deployment and installer scripts
+        run: |
+          bash -n install.sh infra/deploy.sh infra/one-click-deploy.sh \
+            scripts/quickstart.sh scripts/smoke-test-real-audio.sh \
+            backend/start.sh backend/start_worker.sh
+      - name: Validate Bash self-host topology
+        run: |
+          cp .env.example .env
+          bash scripts/quickstart.sh doctor
+      - name: Validate PowerShell scripts
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile("$PWD/install.ps1", [ref]$tokens, [ref]$errors) | Out-Null
+          [System.Management.Automation.Language.Parser]::ParseFile("$PWD/scripts/quickstart.ps1", [ref]$tokens, [ref]$errors) | Out-Null
+          [System.Management.Automation.Language.Parser]::ParseFile("$PWD/scripts/smoke-test-real-audio.ps1", [ref]$tokens, [ref]$errors) | Out-Null
+          if ($errors.Count -gt 0) {
+            $errors | Format-List | Out-String | Write-Error
+          }
+          ./scripts/quickstart.ps1 doctor
+
+  windows-installer:
+    name: Windows PowerShell 5.1 installer
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse installers with Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          if ($PSVersionTable.PSVersion.Major -ne 5) {
+            throw "Expected Windows PowerShell 5.1, got $($PSVersionTable.PSVersion)"
+          }
+          foreach ($script in @("install.ps1", "scripts/quickstart.ps1", "scripts/smoke-test-real-audio.ps1")) {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile(
+              (Join-Path $PWD $script),
+              [ref]$tokens,
+              [ref]$errors
+            ) | Out-Null
+            if ($errors.Count -gt 0) {
+              $errors | Format-List | Out-String | Write-Error
+            }
+          }
+      - name: Validate PowerShell 5.1 secret and UTF-8 generation
+        shell: powershell
+        run: |
+          $tempRoot = Join-Path $env:RUNNER_TEMP "meeting-insights-ps51-$([guid]::NewGuid())"
+          try {
+            New-Item -ItemType Directory -Path (Join-Path $tempRoot "scripts") -Force | Out-Null
+            Copy-Item "scripts/quickstart.ps1" (Join-Path $tempRoot "scripts/quickstart.ps1")
+            $env:MEETING_INSIGHTS_ENV_ONLY = "true"
+            & (Join-Path $tempRoot "scripts/quickstart.ps1") doctor
+
+            $envFile = Join-Path $tempRoot ".env"
+            $bytes = [System.IO.File]::ReadAllBytes($envFile)
+            if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xef -and $bytes[1] -eq 0xbb -and $bytes[2] -eq 0xbf) {
+              throw ".env must be UTF-8 without a BOM"
+            }
+
+            $content = [System.IO.File]::ReadAllText($envFile)
+            foreach ($name in @("POSTGRES_PASSWORD", "AWS_SECRET_ACCESS_KEY", "API_KEY")) {
+              if ($content -notmatch "(?m)^$name=[0-9a-f]{48}\r?$") {
+                throw "$name was not generated as a 48-character hexadecimal secret"
+              }
+            }
+
+            $original = $content
+            & (Join-Path $tempRoot "scripts/quickstart.ps1") doctor
+            if ([System.IO.File]::ReadAllText($envFile) -ne $original) {
+              throw "Existing .env was overwritten"
+            }
+          }
+          finally {
+            Remove-Item Env:MEETING_INSIGHTS_ENV_ONLY -ErrorAction SilentlyContinue
+            if (Test-Path $tempRoot) { Remove-Item $tempRoot -Recurse -Force }
+          }

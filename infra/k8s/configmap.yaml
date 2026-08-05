@@ -4,24 +4,32 @@ metadata:
   name: meeting-insights-config
   namespace: meeting-insights
 data:
-  # Database configuration (secrets will be loaded separately)
   POSTGRES_HOST: "REPLACE_WITH_RDS_ENDPOINT"
   POSTGRES_PORT: "5432"
   POSTGRES_DB: "meeting_insights"
-  
-  # Redis configuration
+
   REDIS_HOST: "REPLACE_WITH_REDIS_ENDPOINT"
   REDIS_PORT: "6379"
   REDIS_DB: "0"
-  
-  # Application configuration
+  MAX_QUEUE_SIZE: "100"
+  MAX_JOB_ATTEMPTS: "3"
+  JOB_TTL_SECONDS: "86400"
+
+  STORAGE_BACKEND: "s3"
+  S3_BUCKET: "REPLACE_WITH_S3_BUCKET"
+  AWS_REGION: "REPLACE_WITH_AWS_REGION"
+  S3_STARTUP_ATTEMPTS: "10"
+  S3_STARTUP_DELAY_SECONDS: "2"
+  DELETE_AUDIO_AFTER_PROCESSING: "true"
+
+  AI_PROVIDER: "local"
   USE_WORKER_SERVICE: "true"
-  FW_MODEL: "base.en"
-  FW_COMPUTE_TYPE: "float32"
-  UPLOAD_DIR: "/app/uploads"
+  ALLOW_SYNC_FALLBACK: "false"
+  FW_MODEL: "small"
+  FW_DEVICE: "cpu"
+  FW_COMPUTE_TYPE: "int8"
   WORKER_HEALTH_PORT: "8001"
-  
-  # API configuration
+  LOG_LEVEL: "INFO"
   DEBUG: "false"
 ---
 apiVersion: v1
@@ -30,4 +38,4 @@ metadata:
   name: meeting-insights-frontend-config
   namespace: meeting-insights
 data:
-  NEXT_PUBLIC_API_URL: "http://REPLACE_WITH_API_SERVICE_URL"
+  INTERNAL_API_URL: "http://meeting-insights-api"

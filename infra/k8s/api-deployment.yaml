@@ -37,6 +37,7 @@ spec:
             secretKeyRef:
               name: meeting-insights-secrets
               key: OPENAI_API_KEY
+              optional: true
         - name: API_KEY
           valueFrom:
             secretKeyRef:
@@ -65,12 +66,6 @@ spec:
             port: 8000
           initialDelaySeconds: 5
           periodSeconds: 5
-        volumeMounts:
-        - name: uploads
-          mountPath: /app/uploads
-      volumes:
-      - name: uploads
-        emptyDir: {}
 ---
 apiVersion: v1
 kind: Service

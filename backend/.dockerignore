@@ -1,4 +1,13 @@
-__pycache__
-.venv
+__pycache__/
 *.pyc
 *.pyo
+.pytest_cache/
+.venv/
+venv/
+uploads/
+benchmarks/
+reports/
+tests/
+*.log
+.git/
+.DS_Store

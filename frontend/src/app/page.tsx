@@ -1,20 +1,39 @@
 "use client";
 
-import React, { useState, useEffect, useCallback } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { meetingService, Meeting } from "@/lib/api";
-import { MagnifyingGlassIcon, PlusIcon } from "@heroicons/react/24/outline";
 import { useRouter } from "next/navigation";
+import {
+  MagnifyingGlassIcon,
+  PlusIcon,
+} from "@heroicons/react/24/outline";
+
+import { meetingService } from "@/lib/api";
+import type { Meeting } from "@/lib/api";
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : "Unexpected request failure";
+}
+
+function formatDate(dateString: string): string {
+  return new Date(dateString).toLocaleDateString("en-US", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
 
 function MeetingCardSkeleton() {
   return (
-    <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6 animate-pulse">
-      <div className="h-5 bg-gray-200 rounded w-3/4 mb-3"></div>
-      <div className="h-4 bg-gray-200 rounded w-1/2 mb-4"></div>
+    <div className="animate-pulse rounded-lg border border-gray-200 bg-white p-6 shadow-sm">
+      <div className="mb-3 h-5 w-3/4 rounded bg-gray-200" />
+      <div className="mb-4 h-4 w-1/2 rounded bg-gray-200" />
       <div className="space-y-2">
-        <div className="h-3 bg-gray-200 rounded"></div>
-        <div className="h-3 bg-gray-200 rounded w-5/6"></div>
-        <div className="h-3 bg-gray-200 rounded w-4/6"></div>
+        <div className="h-3 rounded bg-gray-200" />
+        <div className="h-3 w-5/6 rounded bg-gray-200" />
+        <div className="h-3 w-4/6 rounded bg-gray-200" />
       </div>
     </div>
   );
@@ -22,94 +41,70 @@ function MeetingCardSkeleton() {
 
 function MeetingCard({ meeting }: { meeting: Meeting }) {
   const router = useRouter();
-  
-  const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit'
-    });
-  };
-
-  const getSummaryExcerpt = (summary: string | null | undefined) => {
-    if (!summary) return "No summary available";
-    return summary.length > 150 ? summary.substring(0, 150) + "..." : summary;
-  };
-
-  const handleCardClick = () => {
-    router.push(`/meeting/${meeting.id}`);
-  };
+  const summary = meeting.summary?.trim() || "No summary available";
+  const excerpt = summary.length > 150 ? `${summary.slice(0, 150)}...` : summary;
 
   return (
-    <div 
-      onClick={handleCardClick}
-      className="bg-white rounded-lg shadow-sm border border-gray-200 p-6 hover:shadow-md transition-shadow duration-200 cursor-pointer group"
+    <button
+      type="button"
+      onClick={() => router.push(`/meeting/${meeting.id}`)}
+      className="group w-full cursor-pointer rounded-lg border border-gray-200 bg-white p-6 text-left shadow-sm transition-shadow duration-200 hover:shadow-md"
     >
-      <div className="flex items-start justify-between mb-3">
-        <h3 className="text-lg font-semibold text-gray-900 group-hover:text-blue-600 transition-colors">
+      <div className="mb-3 flex items-start justify-between gap-3">
+        <h2 className="text-lg font-semibold text-gray-900 transition-colors group-hover:text-blue-600">
           {meeting.filename}
-        </h3>
-        {meeting.duration_seconds && (
-          <span className="text-sm text-gray-500 bg-gray-100 px-2 py-1 rounded">
+        </h2>
+        {meeting.duration_seconds != null ? (
+          <span className="shrink-0 rounded bg-gray-100 px-2 py-1 text-sm text-gray-500">
             {Math.round(meeting.duration_seconds / 60)}m
           </span>
-        )}
+        ) : null}
       </div>
-      
-      <p className="text-sm text-gray-500 mb-4">
-        {formatDate(meeting.created_at)}
-        {meeting.language && (
-          <span className="ml-2 text-xs bg-blue-100 text-blue-800 px-2 py-0.5 rounded">
+
+      <div className="mb-4 flex flex-wrap items-center gap-2 text-sm text-gray-500">
+        <span>{formatDate(meeting.created_at)}</span>
+        {meeting.language ? (
+          <span className="rounded bg-blue-100 px-2 py-0.5 text-xs text-blue-800">
             {meeting.language.toUpperCase()}
           </span>
-        )}
-      </p>
-      
-      <p className="text-gray-700 text-sm leading-relaxed mb-4">
-        {getSummaryExcerpt(meeting.summary)}
-      </p>
-      
-      {meeting.keywords && meeting.keywords.length > 0 && (
+        ) : null}
+        {meeting.status ? (
+          <span className="rounded bg-gray-100 px-2 py-0.5 text-xs text-gray-700">
+            {meeting.status}
+          </span>
+        ) : null}
+      </div>
+
+      <p className="mb-4 text-sm leading-relaxed text-gray-700">{excerpt}</p>
+
+      {meeting.keywords?.length ? (
         <div className="flex flex-wrap gap-1">
-          {meeting.keywords.slice(0, 4).map((keyword, index) => (
-            <span 
-              key={index}
-              className="text-xs bg-gray-100 text-gray-600 px-2 py-1 rounded"
+          {meeting.keywords.slice(0, 4).map((keyword) => (
+            <span
+              key={keyword}
+              className="rounded bg-gray-100 px-2 py-1 text-xs text-gray-600"
             >
               {keyword}
             </span>
           ))}
-          {meeting.keywords.length > 4 && (
-            <span className="text-xs text-gray-500">+{meeting.keywords.length - 4} more</span>
-          )}
+          {meeting.keywords.length > 4 ? (
+            <span className="text-xs text-gray-500">
+              +{meeting.keywords.length - 4} more
+            </span>
+          ) : null}
         </div>
-      )}
-    </div>
+      ) : null}
+    </button>
   );
 }
 
 export default function Home() {
   const [meetings, setMeetings] = useState<Meeting[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [searchQuery, setSearchQuery] = useState("");
-  const [isSearching, setIsSearching] = useState(false);
   const [searchResults, setSearchResults] = useState<Meeting[]>([]);
-  
-  const fetchMeetings = useCallback(async () => {
-    try {
-      setLoading(true);
-      setError(null);
-      const data = await meetingService.getMeetings();
-      setMeetings(data);
-    } catch (err: any) {
-      setError(err?.response?.data?.detail || err.message || "Failed to fetch meetings");
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [isSearching, setIsSearching] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const handleSearch = useCallback(async (query: string) => {
     if (!query.trim()) {
@@ -118,12 +113,11 @@ export default function Home() {
       return;
     }
 
+    setIsSearching(true);
     try {
-      setIsSearching(true);
-      const results = await meetingService.searchMeetings(query);
-      setSearchResults(results);
-    } catch (err: any) {
-      console.error("Search failed:", err);
+      setSearchResults(await meetingService.searchMeetings(query));
+    } catch (requestError: unknown) {
+      console.error("Search failed", requestError);
       setSearchResults([]);
     } finally {
       setIsSearching(false);
@@ -131,144 +125,154 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    fetchMeetings();
-  }, [fetchMeetings]);
+    let cancelled = false;
+
+    const loadMeetings = async () => {
+      try {
+        const data = await meetingService.getMeetings();
+        if (!cancelled) {
+          setMeetings(data);
+          setError(null);
+        }
+      } catch (requestError: unknown) {
+        if (!cancelled) setError(getErrorMessage(requestError));
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+
+    void loadMeetings();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
-    const timeoutId = setTimeout(() => {
-      handleSearch(searchQuery);
+    const timeoutId = window.setTimeout(() => {
+      void handleSearch(searchQuery);
     }, 300);
+    return () => window.clearTimeout(timeoutId);
+  }, [handleSearch, searchQuery]);
 
-    return () => clearTimeout(timeoutId);
-  }, [searchQuery, handleSearch]);
+  const retryFetchMeetings = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      setMeetings(await meetingService.getMeetings());
+    } catch (requestError: unknown) {
+      setError(getErrorMessage(requestError));
+    } finally {
+      setLoading(false);
+    }
+  };
 
-  const displayedMeetings = searchQuery.trim() ? searchResults : meetings;
-  const isShowingSearchResults = searchQuery.trim().length > 0;
+  const showingSearchResults = searchQuery.trim().length > 0;
+  const displayedMeetings = showingSearchResults ? searchResults : meetings;
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+      <header className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-3xl font-bold text-gray-900">Meeting Dashboard</h1>
-          <p className="text-gray-600 mt-1">
-            {meetings.length} meetings analyzed
-          </p>
+          <p className="mt-1 text-gray-600">{meetings.length} meetings analyzed</p>
         </div>
         <Link
           href="/upload"
-          className="inline-flex items-center px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors duration-200"
+          className="inline-flex items-center rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700"
         >
-          <PlusIcon className="h-5 w-5 mr-2" />
+          <PlusIcon className="mr-2 h-5 w-5" />
           Upload New Meeting
         </Link>
-      </div>
+      </header>
 
-      {/* Search Bar */}
       <div className="relative">
-        <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-          <MagnifyingGlassIcon className="h-5 w-5 text-gray-400" />
-        </div>
+        <MagnifyingGlassIcon className="pointer-events-none absolute left-3 top-3.5 h-5 w-5 text-gray-400" />
         <input
-          type="text"
+          type="search"
+          aria-label="Search meetings"
           placeholder="Search meetings by content, filename, or keywords..."
           value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-          className="block w-full pl-10 pr-3 py-3 border border-gray-300 rounded-lg leading-5 bg-white placeholder-gray-500 focus:outline-none focus:placeholder-gray-400 focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
+          onChange={(event) => setSearchQuery(event.target.value)}
+          className="block w-full rounded-lg border border-gray-300 bg-white py-3 pl-10 pr-10 placeholder-gray-500 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
         />
-        {isSearching && (
-          <div className="absolute inset-y-0 right-0 pr-3 flex items-center">
-            <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-600"></div>
-          </div>
-        )}
+        {isSearching ? (
+          <div className="absolute right-3 top-4 h-4 w-4 animate-spin rounded-full border-b-2 border-blue-600" />
+        ) : null}
       </div>
 
-      {/* Search Results Info */}
-      {isShowingSearchResults && (
-        <div className="text-sm text-gray-600">
-          {isSearching ? (
-            "Searching..."
-          ) : (
-            `Found ${searchResults.length} meeting${searchResults.length !== 1 ? 's' : ''} matching "${searchQuery}"`
-          )}
-        </div>
-      )}
+      {showingSearchResults ? (
+        <p className="text-sm text-gray-600">
+          {isSearching
+            ? "Searching..."
+            : `${searchResults.length} matching meeting${searchResults.length === 1 ? "" : "s"}`}
+        </p>
+      ) : null}
 
-      {/* Error State */}
-      {error && (
-        <div className="bg-red-50 border border-red-200 rounded-lg p-4">
-          <div className="flex">
-            <div className="text-sm text-red-700">
-              <strong>Error:</strong> {error}
-            </div>
-          </div>
+      {error ? (
+        <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+          <strong>Error:</strong> {error}
           <button
-            onClick={fetchMeetings}
-            className="mt-3 text-sm text-red-600 hover:text-red-500 underline"
+            type="button"
+            onClick={() => void retryFetchMeetings()}
+            className="ml-3 text-red-600 underline hover:text-red-500"
           >
             Try again
           </button>
         </div>
-      )}
+      ) : null}
 
-      {/* Loading State */}
-      {loading && (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {[...Array(6)].map((_, i) => (
-            <MeetingCardSkeleton key={i} />
+      {loading ? (
+        <div className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3">
+          {Array.from({ length: 6 }, (_, index) => (
+            <MeetingCardSkeleton key={index} />
           ))}
         </div>
-      )}
+      ) : null}
 
-      {/* Empty State */}
-      {!loading && !error && displayedMeetings.length === 0 && (
-        <div className="text-center py-12">
-          <div className="mx-auto h-24 w-24 bg-gray-100 rounded-full flex items-center justify-center mb-6">
-            {isShowingSearchResults ? (
+      {!loading && !error && displayedMeetings.length === 0 ? (
+        <section className="py-12 text-center">
+          <div className="mx-auto mb-6 flex h-24 w-24 items-center justify-center rounded-full bg-gray-100">
+            {showingSearchResults ? (
               <MagnifyingGlassIcon className="h-12 w-12 text-gray-400" />
             ) : (
               <PlusIcon className="h-12 w-12 text-gray-400" />
             )}
           </div>
-          {isShowingSearchResults ? (
-            <div>
-              <h3 className="text-lg font-medium text-gray-900 mb-2">No meetings found</h3>
-              <p className="text-gray-500 mb-6">
-                No meetings match your search for "{searchQuery}"
-              </p>
-              <button
-                onClick={() => setSearchQuery("")}
-                className="text-blue-600 hover:text-blue-500 underline"
-              >
-                Clear search
-              </button>
-            </div>
+          <h2 className="mb-2 text-lg font-medium text-gray-900">
+            {showingSearchResults ? "No meetings found" : "No meetings yet"}
+          </h2>
+          <p className="mb-6 text-gray-500">
+            {showingSearchResults
+              ? `No meetings match ${searchQuery}.`
+              : "Upload your first recording to generate private, structured meeting insights."}
+          </p>
+          {showingSearchResults ? (
+            <button
+              type="button"
+              onClick={() => setSearchQuery("")}
+              className="text-blue-600 underline hover:text-blue-500"
+            >
+              Clear search
+            </button>
           ) : (
-            <div>
-              <h3 className="text-lg font-medium text-gray-900 mb-2">No meetings yet</h3>
-              <p className="text-gray-500 mb-6">
-                Upload your first meeting recording to get started with AI-powered insights.
-              </p>
-              <Link
-                href="/upload"
-                className="inline-flex items-center px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors duration-200"
-              >
-                <PlusIcon className="h-5 w-5 mr-2" />
-                Upload Your First Meeting
-              </Link>
-            </div>
+            <Link
+              href="/upload"
+              className="inline-flex items-center rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+            >
+              <PlusIcon className="mr-2 h-5 w-5" />
+              Upload Your First Meeting
+            </Link>
           )}
-        </div>
-      )}
+        </section>
+      ) : null}
 
-      {/* Meeting Cards */}
-      {!loading && !error && displayedMeetings.length > 0 && (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+      {!loading && !error && displayedMeetings.length > 0 ? (
+        <div className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3">
           {displayedMeetings.map((meeting) => (
             <MeetingCard key={meeting.id} meeting={meeting} />
           ))}
         </div>
-      )}
+      ) : null}
     </div>
   );
 }

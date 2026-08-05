@@ -1,6 +1,6 @@
-# 🚀 One-Click AWS EKS Deployment
+# AWS EKS deployment
 
-Deploy a complete cloud-native AI meeting insights platform with a single command!
+The Terraform, Kubernetes, and deployment entrypoints in this directory are definition-validated. They have not been live-applied for this project.
 
 ## Quick Start
 
@@ -12,13 +12,17 @@ Deploy a complete cloud-native AI meeting insights platform with a single comman
    aws configure  # Enter your AWS credentials
    ```
 
-2. **Deploy everything**:
+2. **Validate and review the plan**:
    ```bash
    cd infra
-   ./one-click-deploy.sh
+   ./deploy.sh init
+   ./deploy.sh plan
    ```
 
-That's it! ☕ Grab some coffee while it deploys (~15-20 minutes).
+3. **Apply only after reviewing the plan and account-level cost/security controls**:
+   ```bash
+   CONFIRM_DEPLOY=yes ./one-click-deploy.sh
+   ```
 
 ## What Gets Deployed
 
@@ -30,7 +34,7 @@ That's it! ☕ Grab some coffee while it deploys (~15-20 minutes).
 - ✅ **Networking** - VPC with public/private subnets
 - ✅ **Security** - IAM roles, security groups, encrypted storage
 
-## Zero Configuration Required
+## Automated configuration
 
 - ✨ **Auto-detects** your AWS region and account
 - ✨ **Generates** unique cluster names automatically  
@@ -40,14 +44,14 @@ That's it! ☕ Grab some coffee while it deploys (~15-20 minutes).
 
 ## Cost
 
-Estimated monthly cost: **$50-100** for development usage
+This stack creates billable EKS, EC2, NAT Gateway, RDS, ElastiCache, S3, load-balancer, and related resources. No monthly cost estimate has been validated; calculate it for the target region and account before applying.
 
 ## Cleanup
 
 To remove everything and stop charges:
 ```bash
-cd infra/terraform
-terraform destroy
+cd infra
+CONFIRM_DESTROY=yes ./deploy.sh destroy
 ```
 
 ## Advanced Usage
@@ -68,4 +72,4 @@ Internet → AWS ALB → EKS Cluster → FastAPI Pods → RDS PostgreSQL
                                               → ElastiCache Redis
 ```
 
-Your application runs in a highly available, auto-scaling Kubernetes cluster with managed databases and automatic SSL termination.
+The checked-in development defaults use a managed EKS node group, one RDS instance, one Redis node, and one NAT Gateway. DNS, TLS, high availability, backup/restore, scaling, and rollback behavior require an owner-operated deployment review.

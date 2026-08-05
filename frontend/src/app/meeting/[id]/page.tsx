@@ -1,331 +1,204 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
-import { useRouter, useParams } from "next/navigation";
-import { meetingService, MeetingDetail } from "@/lib/api";
-import { 
-  ArrowLeftIcon, 
-  TrashIcon, 
-  CalendarIcon,
+import { useEffect, useState } from "react";
+import { useParams, useRouter } from "next/navigation";
+import {
+  ArrowLeftIcon,
+  CheckCircleIcon,
   ClockIcon,
-  LanguageIcon,
-  TagIcon,
   DocumentTextIcon,
-  ExclamationTriangleIcon
+  ExclamationTriangleIcon,
+  QuestionMarkCircleIcon,
+  TrashIcon,
 } from "@heroicons/react/24/outline";
+import { meetingService, MeetingDetail } from "@/lib/api";
 
-// Loading skeleton
-function DetailSkeleton() {
-  return (
-    <div className="space-y-6 animate-pulse">
-      <div className="h-8 bg-gray-200 rounded w-3/4"></div>
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        {[...Array(4)].map((_, i) => (
-          <div key={i} className="bg-white rounded-lg border border-gray-200 p-4">
-            <div className="h-4 bg-gray-200 rounded w-1/2 mb-2"></div>
-            <div className="h-6 bg-gray-200 rounded"></div>
-          </div>
-        ))}
-      </div>
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <div className="bg-white rounded-lg border border-gray-200 p-6">
-          <div className="h-6 bg-gray-200 rounded w-1/3 mb-4"></div>
-          <div className="space-y-3">
-            {[...Array(8)].map((_, i) => (
-              <div key={i} className="h-4 bg-gray-200 rounded"></div>
-            ))}
-          </div>
-        </div>
-        <div className="bg-white rounded-lg border border-gray-200 p-6">
-          <div className="h-6 bg-gray-200 rounded w-1/3 mb-4"></div>
-          <div className="space-y-3">
-            {[...Array(12)].map((_, i) => (
-              <div key={i} className="h-4 bg-gray-200 rounded"></div>
-            ))}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// Delete confirmation modal
-function DeleteModal({ 
-  isOpen, 
-  onClose, 
-  onConfirm, 
-  filename,
-  isDeleting 
+function Section({
+  title,
+  items,
+  icon,
 }: {
-  isOpen: boolean;
-  onClose: () => void;
-  onConfirm: () => void;
-  filename: string;
-  isDeleting: boolean;
+  title: string;
+  items?: string[] | null;
+  icon: React.ReactNode;
 }) {
-  if (!isOpen) return null;
-
+  if (!items?.length) return null;
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
-      <div className="bg-white rounded-lg max-w-md w-full p-6">
-        <div className="flex items-center mb-4">
-          <ExclamationTriangleIcon className="h-6 w-6 text-red-600 mr-3" />
-          <h3 className="text-lg font-semibold text-gray-900">Delete Meeting</h3>
-        </div>
-        
-        <p className="text-gray-600 mb-6">
-          Are you sure you want to delete "{filename}"? This action cannot be undone.
-        </p>
-        
-        <div className="flex justify-end space-x-3">
-          <button
-            onClick={onClose}
-            disabled={isDeleting}
-            className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors duration-200 disabled:opacity-50"
-          >
-            Cancel
-          </button>
-          <button
-            onClick={onConfirm}
-            disabled={isDeleting}
-            className="px-4 py-2 text-sm font-medium text-white bg-red-600 hover:bg-red-700 rounded-lg transition-colors duration-200 disabled:opacity-50 flex items-center"
-          >
-            {isDeleting && (
-              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
-            )}
-            {isDeleting ? "Deleting..." : "Delete"}
-          </button>
-        </div>
-      </div>
-    </div>
+    <section className="rounded-lg border border-gray-200 bg-white p-6">
+      <h2 className="mb-4 flex items-center text-lg font-semibold text-gray-900">
+        <span className="mr-2">{icon}</span>
+        {title}
+      </h2>
+      <ul className="space-y-2 text-sm text-gray-700">
+        {items.map((item, index) => (
+          <li key={`${title}-${index}`} className="flex gap-2">
+            <span className="mt-1 text-gray-400">•</span>
+            <span>{item}</span>
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }
 
 export default function MeetingDetailPage() {
   const router = useRouter();
   const params = useParams();
-  const id = params.id as string;
-  
+  const id = Number(params.id);
   const [meeting, setMeeting] = useState<MeetingDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [showDeleteModal, setShowDeleteModal] = useState(false);
-  const [isDeleting, setIsDeleting] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
-    if (id) {
-      fetchMeeting();
-    }
+    let cancelled = false;
+    let refreshTimer: ReturnType<typeof setTimeout> | undefined;
+
+    const loadMeeting = async () => {
+      try {
+        const data = await meetingService.getMeeting(id);
+        if (cancelled) return;
+        setMeeting(data);
+        setError(null);
+        if (data.status === "queued" || data.status === "processing") {
+          refreshTimer = setTimeout(loadMeeting, 3_000);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : "Unable to load meeting");
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+
+    void loadMeeting();
+    return () => {
+      cancelled = true;
+      if (refreshTimer) clearTimeout(refreshTimer);
+    };
   }, [id]);
 
-  const fetchMeeting = async () => {
-    try {
-      setLoading(true);
-      setError(null);
-      const data = await meetingService.getMeeting(parseInt(id));
-      setMeeting(data);
-    } catch (err: any) {
-      setError(err?.response?.data?.detail || err.message || "Failed to fetch meeting details");
-    } finally {
-      setLoading(false);
-    }
-  };
-
   const handleDelete = async () => {
+    if (!meeting || !window.confirm(`Delete ${meeting.filename}?`)) return;
+    setDeleting(true);
     try {
-      setIsDeleting(true);
-      await meetingService.deleteMeeting(parseInt(id));
+      await meetingService.deleteMeeting(meeting.id);
       router.push("/");
-    } catch (err: any) {
-      setError(err?.response?.data?.detail || err.message || "Failed to delete meeting");
-      setShowDeleteModal(false);
-    } finally {
-      setIsDeleting(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Delete failed");
+      setDeleting(false);
     }
-  };
-
-  const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'long',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit'
-    });
-  };
-
-  const formatDuration = (seconds: number) => {
-    const minutes = Math.floor(seconds / 60);
-    const remainingSeconds = Math.floor(seconds % 60);
-    return `${minutes}:${remainingSeconds.toString().padStart(2, '0')}`;
   };
 
   if (loading) {
-    return <DetailSkeleton />;
+    return <div className="py-16 text-center text-gray-500">Loading meeting…</div>;
   }
 
   if (error || !meeting) {
     return (
-      <div className="text-center py-12">
-        <div className="mx-auto h-24 w-24 bg-red-100 rounded-full flex items-center justify-center mb-6">
-          <ExclamationTriangleIcon className="h-12 w-12 text-red-500" />
-        </div>
-        <h3 className="text-lg font-medium text-gray-900 mb-2">Error Loading Meeting</h3>
-        <p className="text-gray-500 mb-6">
-          {error || "Meeting not found"}
-        </p>
-        <div className="space-x-3">
-          <button
-            onClick={() => router.push("/")}
-            className="inline-flex items-center px-4 py-2 bg-gray-100 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-200 transition-colors duration-200"
-          >
-            <ArrowLeftIcon className="h-4 w-4 mr-2" />
-            Back to Meetings
-          </button>
-          <button
-            onClick={fetchMeeting}
-            className="inline-flex items-center px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors duration-200"
-          >
-            Try Again
-          </button>
-        </div>
+      <div className="py-16 text-center">
+        <ExclamationTriangleIcon className="mx-auto mb-4 h-12 w-12 text-red-500" />
+        <p className="mb-4 text-red-700">{error || "Meeting not found"}</p>
+        <button className="text-blue-600 underline" onClick={() => router.push("/")}>
+          Back to meetings
+        </button>
       </div>
     );
   }
 
+  const insights = meeting.insights;
+
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div className="flex items-start space-x-4">
+      <header className="flex flex-col justify-between gap-4 sm:flex-row sm:items-start">
+        <div className="flex gap-3">
           <button
+            aria-label="Back"
             onClick={() => router.push("/")}
-            className="mt-1 p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors duration-200"
+            className="mt-1 rounded p-2 text-gray-500 hover:bg-gray-100"
           >
             <ArrowLeftIcon className="h-5 w-5" />
           </button>
           <div>
             <h1 className="text-3xl font-bold text-gray-900">{meeting.filename}</h1>
-            <p className="text-gray-600 mt-1">Meeting Details</p>
+            <div className="mt-2 flex flex-wrap gap-2 text-sm text-gray-500">
+              <span>{new Date(meeting.created_at).toLocaleString()}</span>
+              {meeting.duration_seconds ? (
+                <span>• {Math.round(meeting.duration_seconds / 60)} min</span>
+              ) : null}
+              {meeting.language ? <span>• {meeting.language.toUpperCase()}</span> : null}
+              {meeting.status ? <span>• {meeting.status}</span> : null}
+            </div>
           </div>
         </div>
-        
         <button
-          onClick={() => setShowDeleteModal(true)}
-          className="inline-flex items-center px-4 py-2 bg-red-600 text-white text-sm font-medium rounded-lg hover:bg-red-700 transition-colors duration-200"
+          onClick={handleDelete}
+          disabled={deleting}
+          className="inline-flex items-center rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
         >
-          <TrashIcon className="h-4 w-4 mr-2" />
-          Delete Meeting
+          <TrashIcon className="mr-2 h-4 w-4" />
+          {deleting ? "Deleting…" : "Delete"}
         </button>
-      </div>
+      </header>
 
-      {/* Meeting Metadata */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="bg-white rounded-lg border border-gray-200 p-4">
-          <div className="flex items-center text-sm text-gray-500 mb-1">
-            <CalendarIcon className="h-4 w-4 mr-1" />
-            Date
-          </div>
-          <div className="font-semibold text-gray-900">
-            {formatDate(meeting.created_at)}
-          </div>
-        </div>
+      {insights ? (
+        <>
+          <section className="rounded-lg border border-blue-200 bg-blue-50 p-6">
+            <div className="mb-2 flex items-center justify-between gap-3">
+              <h2 className="text-lg font-semibold text-blue-950">Overview</h2>
+              {insights.provider ? (
+                <span className="rounded bg-white px-2 py-1 text-xs text-blue-700">
+                  {insights.provider}
+                </span>
+              ) : null}
+            </div>
+            <p className="whitespace-pre-wrap text-blue-950">{insights.overview}</p>
+          </section>
 
-        {meeting.duration_seconds && (
-          <div className="bg-white rounded-lg border border-gray-200 p-4">
-            <div className="flex items-center text-sm text-gray-500 mb-1">
-              <ClockIcon className="h-4 w-4 mr-1" />
-              Duration
-            </div>
-            <div className="font-semibold text-gray-900">
-              {formatDuration(meeting.duration_seconds)}
-            </div>
-          </div>
-        )}
+          {insights.action_items.length ? (
+            <section className="rounded-lg border border-gray-200 bg-white p-6">
+              <h2 className="mb-4 flex items-center text-lg font-semibold text-gray-900">
+                <CheckCircleIcon className="mr-2 h-5 w-5" /> Action Items
+              </h2>
+              <div className="space-y-3">
+                {insights.action_items.map((item, index) => (
+                  <div key={index} className="rounded border border-gray-200 p-4">
+                    <p className="font-medium text-gray-900">{item.task}</p>
+                    <div className="mt-2 flex flex-wrap gap-3 text-xs text-gray-500">
+                      {item.owner ? <span>Owner: {item.owner}</span> : null}
+                      {item.due_date ? <span>Due: {item.due_date}</span> : null}
+                      {item.priority ? <span>Priority: {item.priority}</span> : null}
+                      <span>Status: {item.status || "open"}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+          ) : null}
 
-        {meeting.language && (
-          <div className="bg-white rounded-lg border border-gray-200 p-4">
-            <div className="flex items-center text-sm text-gray-500 mb-1">
-              <LanguageIcon className="h-4 w-4 mr-1" />
-              Language
-            </div>
-            <div className="font-semibold text-gray-900">
-              {meeting.language.toUpperCase()}
-            </div>
+          <div className="grid gap-6 lg:grid-cols-2">
+            <Section title="Key Points" items={insights.key_points} icon={<DocumentTextIcon className="h-5 w-5" />} />
+            <Section title="Decisions" items={insights.decisions} icon={<CheckCircleIcon className="h-5 w-5" />} />
+            <Section title="Risks & Blockers" items={insights.risks} icon={<ExclamationTriangleIcon className="h-5 w-5" />} />
+            <Section title="Open Questions" items={insights.open_questions} icon={<QuestionMarkCircleIcon className="h-5 w-5" />} />
           </div>
-        )}
-
-        {meeting.keywords && meeting.keywords.length > 0 && (
-          <div className="bg-white rounded-lg border border-gray-200 p-4">
-            <div className="flex items-center text-sm text-gray-500 mb-1">
-              <TagIcon className="h-4 w-4 mr-1" />
-              Keywords
-            </div>
-            <div className="font-semibold text-gray-900">
-              {meeting.keywords.length} tags
-            </div>
+        </>
+      ) : (
+        <section className="rounded-lg border border-gray-200 bg-white p-6">
+          <div className="flex items-center text-gray-600">
+            <ClockIcon className="mr-2 h-5 w-5" />
+            Structured insights are not available yet.
           </div>
-        )}
-      </div>
-
-      {/* Keywords */}
-      {meeting.keywords && meeting.keywords.length > 0 && (
-        <div className="bg-white rounded-lg border border-gray-200 p-6">
-          <h2 className="text-lg font-semibold text-gray-900 mb-4">Keywords</h2>
-          <div className="flex flex-wrap gap-2">
-            {meeting.keywords.map((keyword, index) => (
-              <span
-                key={index}
-                className="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-blue-100 text-blue-800"
-              >
-                {keyword}
-              </span>
-            ))}
-          </div>
-        </div>
+        </section>
       )}
 
-      {/* Content */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Summary */}
-        <div className="bg-white rounded-lg border border-gray-200 p-6">
-          <h2 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
-            <DocumentTextIcon className="h-5 w-5 mr-2" />
-            Summary
-          </h2>
-          {meeting.summary ? (
-            <div className="prose prose-sm max-w-none text-gray-700 whitespace-pre-wrap">
-              {meeting.summary}
-            </div>
-          ) : (
-            <p className="text-gray-500 italic">No summary available</p>
-          )}
+      <section className="rounded-lg border border-gray-200 bg-white p-6">
+        <h2 className="mb-4 text-lg font-semibold text-gray-900">Transcript</h2>
+        <div className="max-h-[32rem] overflow-y-auto whitespace-pre-wrap text-sm leading-6 text-gray-700">
+          {meeting.transcript || "Transcript not available yet."}
         </div>
-
-        {/* Transcript */}
-        <div className="bg-white rounded-lg border border-gray-200 p-6">
-          <h2 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
-            <DocumentTextIcon className="h-5 w-5 mr-2" />
-            Transcript
-          </h2>
-          {meeting.transcript ? (
-            <div className="prose prose-sm max-w-none text-gray-700 whitespace-pre-wrap max-h-96 overflow-y-auto">
-              {meeting.transcript}
-            </div>
-          ) : (
-            <p className="text-gray-500 italic">No transcript available</p>
-          )}
-        </div>
-      </div>
-
-      {/* Delete Modal */}
-      <DeleteModal
-        isOpen={showDeleteModal}
-        onClose={() => setShowDeleteModal(false)}
-        onConfirm={handleDelete}
-        filename={meeting.filename}
-        isDeleting={isDeleting}
-      />
+      </section>
     </div>
   );
 }
