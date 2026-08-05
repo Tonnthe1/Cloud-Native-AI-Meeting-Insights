@@ -8,12 +8,12 @@ resource "random_password" "db_password" {
 resource "aws_db_instance" "postgresql" {
   identifier     = "${local.cluster_name}-postgres"
   engine         = "postgres"
-  engine_version = "15.4"
+  engine_version = "15"
   instance_class = var.db_instance_class
 
   allocated_storage     = var.db_allocated_storage
   max_allocated_storage = 100
-  storage_type          = "gp2"
+  storage_type          = "gp3"
   storage_encrypted     = true
 
   db_name  = var.db_name

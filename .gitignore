@@ -216,6 +216,7 @@ __marimo__/
 !*.tfvars.example
 .terraform/
 .terraform.lock.hcl
+!infra/terraform/.terraform.lock.hcl
 terraform.tfplan
 tfplan
 

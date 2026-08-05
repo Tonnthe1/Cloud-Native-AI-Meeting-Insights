@@ -222,7 +222,8 @@ create_runtime_identity() {
 }
 
 ensure_load_balancer_controller() {
-  local role_arn cluster_name vpc_id
+  local chart_version role_arn cluster_name vpc_id
+  chart_version=1.14.0
   role_arn=$(tf output -raw load_balancer_controller_role_arn)
   cluster_name=$(tf output -raw cluster_name)
   vpc_id=$(tf output -raw vpc_id)
@@ -236,10 +237,12 @@ ensure_load_balancer_controller() {
     --overwrite
 
   helm repo add eks https://aws.github.io/eks-charts --force-update
+  helm show crds eks/aws-load-balancer-controller \
+    --version "${chart_version}" | kubectl apply -f -
   helm upgrade --install aws-load-balancer-controller \
     eks/aws-load-balancer-controller \
     --namespace kube-system \
-    --version 1.7.2 \
+    --version "${chart_version}" \
     --set clusterName="${cluster_name}" \
     --set region="${AWS_REGION}" \
     --set vpcId="${vpc_id}" \

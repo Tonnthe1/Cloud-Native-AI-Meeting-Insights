@@ -1,7 +1,7 @@
 # EKS Cluster
 module "eks" {
   source  = "terraform-aws-modules/eks/aws"
-  version = "~> 19.15"
+  version = "~> 20.0"
 
   cluster_name    = local.cluster_name
   cluster_version = var.cluster_version
@@ -28,7 +28,7 @@ module "eks" {
       desired_size = var.node_desired_capacity
 
       # Node group configuration
-      ami_type  = "AL2_x86_64"
+      ami_type  = "AL2023_x86_64_STANDARD"
       disk_size = 20 # GB - minimum recommended
 
       # Labels and taints
@@ -50,14 +50,7 @@ module "eks" {
     }
   }
 
-  # aws-auth configmap
-  manage_aws_auth_configmap = true
-  aws_auth_roles = [
-    # Add additional IAM roles here if needed
-  ]
-  aws_auth_users = [
-    # Add IAM users here if needed
-  ]
+  enable_cluster_creator_admin_permissions = true
 
   tags = merge(var.tags, {
     Environment = var.environment

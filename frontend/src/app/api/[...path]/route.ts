@@ -10,6 +10,32 @@ const INTERNAL_API_URL = (
   process.env.INTERNAL_API_URL || "http://backend-api:8000"
 ).replace(/\/$/, "");
 
+const PROHIBITED_PROXY_HEADERS = [
+  "connection",
+  "content-length",
+  "expect",
+  "host",
+  "keep-alive",
+  "proxy-authenticate",
+  "proxy-authorization",
+  "proxy-connection",
+  "te",
+  "trailer",
+  "transfer-encoding",
+  "upgrade",
+];
+
+function stripProhibitedProxyHeaders(headers: Headers) {
+  const connectionTokens = headers.get("connection")?.split(",") || [];
+  for (const token of connectionTokens) {
+    const header = token.trim();
+    if (header) headers.delete(header);
+  }
+  for (const header of PROHIBITED_PROXY_HEADERS) {
+    headers.delete(header);
+  }
+}
+
 async function proxy(request: NextRequest, context: RouteContext) {
   const { path } = await context.params;
   const incomingUrl = new URL(request.url);
@@ -17,9 +43,7 @@ async function proxy(request: NextRequest, context: RouteContext) {
   targetUrl.search = incomingUrl.search;
 
   const headers = new Headers(request.headers);
-  headers.delete("host");
-  headers.delete("connection");
-  headers.delete("content-length");
+  stripProhibitedProxyHeaders(headers);
 
   const apiKey = process.env.API_KEY;
   if (apiKey) {
@@ -41,8 +65,7 @@ async function proxy(request: NextRequest, context: RouteContext) {
   const response = await fetch(targetUrl, requestInit);
   const responseHeaders = new Headers(response.headers);
   responseHeaders.delete("content-encoding");
-  responseHeaders.delete("content-length");
-  responseHeaders.delete("transfer-encoding");
+  stripProhibitedProxyHeaders(responseHeaders);
 
   return new Response(response.body, {
     status: response.status,

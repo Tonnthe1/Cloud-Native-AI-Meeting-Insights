@@ -106,18 +106,6 @@ export default function Home() {
   const [isSearching, setIsSearching] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const fetchMeetings = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      setMeetings(await meetingService.getMeetings());
-    } catch (requestError: unknown) {
-      setError(getErrorMessage(requestError));
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
   const handleSearch = useCallback(async (query: string) => {
     if (!query.trim()) {
       setSearchResults([]);
@@ -137,8 +125,27 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    void fetchMeetings();
-  }, [fetchMeetings]);
+    let cancelled = false;
+
+    const loadMeetings = async () => {
+      try {
+        const data = await meetingService.getMeetings();
+        if (!cancelled) {
+          setMeetings(data);
+          setError(null);
+        }
+      } catch (requestError: unknown) {
+        if (!cancelled) setError(getErrorMessage(requestError));
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+
+    void loadMeetings();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     const timeoutId = window.setTimeout(() => {
@@ -146,6 +153,18 @@ export default function Home() {
     }, 300);
     return () => window.clearTimeout(timeoutId);
   }, [handleSearch, searchQuery]);
+
+  const retryFetchMeetings = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      setMeetings(await meetingService.getMeetings());
+    } catch (requestError: unknown) {
+      setError(getErrorMessage(requestError));
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const showingSearchResults = searchQuery.trim().length > 0;
   const displayedMeetings = showingSearchResults ? searchResults : meetings;
@@ -194,7 +213,7 @@ export default function Home() {
           <strong>Error:</strong> {error}
           <button
             type="button"
-            onClick={() => void fetchMeetings()}
+            onClick={() => void retryFetchMeetings()}
             className="ml-3 text-red-600 underline hover:text-red-500"
           >
             Try again

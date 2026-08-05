@@ -52,19 +52,30 @@ export default function MeetingDetailPage() {
 
   useEffect(() => {
     let cancelled = false;
-    meetingService
-      .getMeeting(id)
-      .then((data) => {
-        if (!cancelled) setMeeting(data);
-      })
-      .catch((err: Error) => {
-        if (!cancelled) setError(err.message);
-      })
-      .finally(() => {
+    let refreshTimer: ReturnType<typeof setTimeout> | undefined;
+
+    const loadMeeting = async () => {
+      try {
+        const data = await meetingService.getMeeting(id);
+        if (cancelled) return;
+        setMeeting(data);
+        setError(null);
+        if (data.status === "queued" || data.status === "processing") {
+          refreshTimer = setTimeout(loadMeeting, 3_000);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : "Unable to load meeting");
+        }
+      } finally {
         if (!cancelled) setLoading(false);
-      });
+      }
+    };
+
+    void loadMeeting();
     return () => {
       cancelled = true;
+      if (refreshTimer) clearTimeout(refreshTimer);
     };
   }, [id]);
 

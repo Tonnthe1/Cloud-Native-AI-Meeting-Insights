@@ -17,7 +17,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && useradd --system --gid app --create-home app
 
 COPY requirements.txt .
-RUN pip install -r requirements.txt
+RUN python -m pip install --upgrade pip setuptools \
+    && python -m pip install -r requirements.txt
 
 COPY --chown=app:app . .
 

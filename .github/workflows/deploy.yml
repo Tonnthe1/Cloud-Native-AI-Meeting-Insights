@@ -63,7 +63,7 @@ jobs:
       - name: Set up kubectl
         uses: azure/setup-kubectl@v4
         with:
-          version: v1.28.0
+          version: v1.34.0
 
       - name: Set up Helm
         uses: azure/setup-helm@v4

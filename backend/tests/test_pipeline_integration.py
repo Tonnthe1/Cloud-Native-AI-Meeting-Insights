@@ -37,11 +37,14 @@ def test_upload_queue_worker_database_pipeline(monkeypatch):
         "get_audio_duration_seconds",
         lambda _path: 42.5,
     )
+    api_key = os.getenv("API_KEY")
+    headers = {"x-api-key": api_key} if api_key else {}
 
     with TestClient(app) as client:
         upload = client.post(
             "/analyze-meeting",
             files={"file": ("planning.wav", b"fake-audio", "audio/wav")},
+            headers=headers,
         )
         assert upload.status_code == 200, upload.text
         queued = upload.json()
@@ -57,11 +60,13 @@ def test_upload_queue_worker_database_pipeline(monkeypatch):
         assert result["raw_audio_deleted"] is True
         queue.complete_job(job["id"], result)
 
-        status = client.get(f"/job-status/{job['id']}")
+        status = client.get(f"/job-status/{job['id']}", headers=headers)
         assert status.status_code == 200
         assert status.json()["status"] == "completed"
 
-        meeting_response = client.get(f"/meetings/{queued['meeting_id']}")
+        meeting_response = client.get(
+            f"/meetings/{queued['meeting_id']}", headers=headers
+        )
         assert meeting_response.status_code == 200
         payload = meeting_response.json()
         assert payload["transcript"] == transcript

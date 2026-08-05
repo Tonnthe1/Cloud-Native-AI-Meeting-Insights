@@ -196,13 +196,15 @@ CI runs:
 ```text
 flake8
 backend unit tests
+Python production dependency audit
 real PostgreSQL + Redis + MinIO pipeline integration test
 MinIO object upload/download/delete round trip
 API image build
 worker image build
-frontend production build and image build
+frontend ESLint, production dependency audit, production build, and image build
 Terraform format/init/validate
 Bash and PowerShell installer validation
+Windows PowerShell 5.1 environment-generation validation
 Docker Compose topology validation
 ```
 
@@ -219,6 +221,26 @@ FastAPI upload
 ```
 
 The integration test substitutes a deterministic transcript for Whisper inference. It validates service orchestration, not speech quality or latency.
+
+### Real-audio smoke tests
+
+After the six default Compose services are healthy, pass a short real audio file to the script for your platform. Both scripts upload through the same Next.js `/api/analyze-meeting` proxy used by the browser, poll `/api/meetings/{id}` every three seconds until processing reaches a terminal state, and require a persisted non-empty transcript.
+
+macOS, Linux, or Git Bash:
+
+```bash
+bash scripts/smoke-test-real-audio.sh ./sample.wav
+```
+
+Windows PowerShell 5.1 or newer:
+
+```powershell
+./scripts/smoke-test-real-audio.ps1 -AudioFile ./sample.wav
+```
+
+Set `SMOKE_TIMEOUT_SECONDS` to adjust the default 30-minute timeout, or pass a second base-URL argument in Bash / `-FrontendBaseUrl` in PowerShell when the frontend is not at `http://localhost:3000`.
+
+These are real-inference smoke tests, not speech-quality, latency, or load benchmarks. The checked-in deterministic integration test remains the repeatable CI coverage for the complete storage and queue pipeline.
 
 ## AWS deployment
 
@@ -244,7 +266,7 @@ This creates billable resources. The script bootstraps encrypted/versioned remot
 
 A manual GitHub Actions deployment is also included. It uses GitHub OIDC and expects an `AWS_DEPLOY_ROLE_ARN` environment secret.
 
-A live AWS apply has not yet been executed as part of automated validation. DNS, TLS, backups, scaling, account permissions, and cost controls still need an owner-operated deployment test before calling the AWS path production-ready.
+AWS infrastructure from this repository has not been live-applied as part of project validation. DNS, TLS, backups, scaling, account permissions, and cost controls still need an owner-operated deployment test before calling the AWS path production-ready.
 
 ## Public images and releases
 
