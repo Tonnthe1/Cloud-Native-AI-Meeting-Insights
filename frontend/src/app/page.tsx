@@ -2,9 +2,13 @@
 
 import React, { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
-import { meetingService, Meeting } from "@/lib/api";
+import { meetingService, Meeting, getErrorMessage, isPending } from "@/lib/api";
+import { formatDate, formatDuration } from "@/lib/format";
+import StatusBadge from "@/components/StatusBadge";
 import { MagnifyingGlassIcon, PlusIcon } from "@heroicons/react/24/outline";
-import { useRouter } from "next/navigation";
+
+// How often to refresh the list while any meeting is still being processed.
+const POLL_INTERVAL_MS = 5000;
 
 function MeetingCardSkeleton() {
   return (
@@ -20,64 +24,62 @@ function MeetingCardSkeleton() {
   );
 }
 
-function MeetingCard({ meeting }: { meeting: Meeting }) {
-  const router = useRouter();
-  
-  const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit'
-    });
-  };
-
-  const getSummaryExcerpt = (summary: string | null | undefined) => {
-    if (!summary) return "No summary available";
-    return summary.length > 150 ? summary.substring(0, 150) + "..." : summary;
-  };
-
-  const handleCardClick = () => {
-    router.push(`/meeting/${meeting.id}`);
-  };
-
+function SummaryExcerpt({ meeting }: { meeting: Meeting }) {
+  if (isPending(meeting.status)) {
+    return <p className="text-gray-500 text-sm italic mb-4">Transcribing and summarizing…</p>;
+  }
+  if (meeting.status === "failed") {
+    return (
+      <p className="text-red-700 text-sm mb-4 line-clamp-3">
+        Processing failed{meeting.error_message ? `: ${meeting.error_message}` : ""}
+      </p>
+    );
+  }
+  const summary = meeting.summary;
   return (
-    <div 
-      onClick={handleCardClick}
-      className="bg-white rounded-lg shadow-sm border border-gray-200 p-6 hover:shadow-md transition-shadow duration-200 cursor-pointer group"
+    <p className="text-gray-700 text-sm leading-relaxed mb-4">
+      {!summary
+        ? "No summary available"
+        : summary.length > 150
+          ? summary.substring(0, 150) + "..."
+          : summary}
+    </p>
+  );
+}
+
+function MeetingCard({ meeting }: { meeting: Meeting }) {
+  return (
+    <Link
+      href={`/meeting/${meeting.id}`}
+      className="block bg-white rounded-lg shadow-sm border border-gray-200 p-6 hover:shadow-md transition-shadow duration-200 group focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
     >
-      <div className="flex items-start justify-between mb-3">
-        <h3 className="text-lg font-semibold text-gray-900 group-hover:text-blue-600 transition-colors">
+      <div className="flex items-start justify-between gap-3 mb-3">
+        <h3 className="text-lg font-semibold text-gray-900 group-hover:text-blue-600 transition-colors break-all">
           {meeting.filename}
         </h3>
-        {meeting.duration_seconds && (
-          <span className="text-sm text-gray-500 bg-gray-100 px-2 py-1 rounded">
-            {Math.round(meeting.duration_seconds / 60)}m
+        {meeting.duration_seconds != null && (
+          <span className="shrink-0 text-sm text-gray-500 bg-gray-100 px-2 py-1 rounded">
+            {formatDuration(meeting.duration_seconds)}
           </span>
         )}
       </div>
-      
-      <p className="text-sm text-gray-500 mb-4">
-        {formatDate(meeting.created_at)}
+
+      <div className="flex flex-wrap items-center gap-2 text-sm text-gray-500 mb-4">
+        <span>{formatDate(meeting.created_at)}</span>
         {meeting.language && (
-          <span className="ml-2 text-xs bg-blue-100 text-blue-800 px-2 py-0.5 rounded">
+          <span className="text-xs bg-blue-100 text-blue-800 px-2 py-0.5 rounded">
             {meeting.language.toUpperCase()}
           </span>
         )}
-      </p>
-      
-      <p className="text-gray-700 text-sm leading-relaxed mb-4">
-        {getSummaryExcerpt(meeting.summary)}
-      </p>
-      
+        {meeting.status !== "completed" && <StatusBadge status={meeting.status} />}
+      </div>
+
+      <SummaryExcerpt meeting={meeting} />
+
       {meeting.keywords && meeting.keywords.length > 0 && (
         <div className="flex flex-wrap gap-1">
-          {meeting.keywords.slice(0, 4).map((keyword, index) => (
-            <span 
-              key={index}
-              className="text-xs bg-gray-100 text-gray-600 px-2 py-1 rounded"
-            >
+          {meeting.keywords.slice(0, 4).map((keyword) => (
+            <span key={keyword} className="text-xs bg-gray-100 text-gray-600 px-2 py-1 rounded">
               {keyword}
             </span>
           ))}
@@ -86,7 +88,7 @@ function MeetingCard({ meeting }: { meeting: Meeting }) {
           )}
         </div>
       )}
-    </div>
+    </Link>
   );
 }
 
@@ -97,36 +99,17 @@ export default function Home() {
   const [searchQuery, setSearchQuery] = useState("");
   const [isSearching, setIsSearching] = useState(false);
   const [searchResults, setSearchResults] = useState<Meeting[]>([]);
-  
+  const [searchError, setSearchError] = useState<string | null>(null);
+
   const fetchMeetings = useCallback(async () => {
     try {
       setLoading(true);
       setError(null);
-      const data = await meetingService.getMeetings();
-      setMeetings(data);
-    } catch (err: any) {
-      setError(err?.response?.data?.detail || err.message || "Failed to fetch meetings");
+      setMeetings(await meetingService.getMeetings());
+    } catch (err) {
+      setError(getErrorMessage(err, "Failed to fetch meetings"));
     } finally {
       setLoading(false);
-    }
-  }, []);
-
-  const handleSearch = useCallback(async (query: string) => {
-    if (!query.trim()) {
-      setSearchResults([]);
-      setIsSearching(false);
-      return;
-    }
-
-    try {
-      setIsSearching(true);
-      const results = await meetingService.searchMeetings(query);
-      setSearchResults(results);
-    } catch (err: any) {
-      console.error("Search failed:", err);
-      setSearchResults([]);
-    } finally {
-      setIsSearching(false);
     }
   }, []);
 
@@ -134,16 +117,52 @@ export default function Home() {
     fetchMeetings();
   }, [fetchMeetings]);
 
+  // Keep refreshing quietly while uploads are still being processed.
+  const hasPending = meetings.some((m) => isPending(m.status));
   useEffect(() => {
-    const timeoutId = setTimeout(() => {
-      handleSearch(searchQuery);
+    if (!hasPending) return;
+    const intervalId = setInterval(() => {
+      meetingService.getMeetings().then(setMeetings).catch(() => {
+        // Transient failures are fine; the next poll will retry.
+      });
+    }, POLL_INTERVAL_MS);
+    return () => clearInterval(intervalId);
+  }, [hasPending]);
+
+  // Debounced search; responses for outdated queries are ignored.
+  useEffect(() => {
+    const query = searchQuery.trim();
+    setSearchError(null);
+    if (!query) {
+      setSearchResults([]);
+      setIsSearching(false);
+      return;
+    }
+
+    let cancelled = false;
+    setIsSearching(true);
+    const timeoutId = setTimeout(async () => {
+      try {
+        const results = await meetingService.searchMeetings(query);
+        if (!cancelled) setSearchResults(results);
+      } catch (err) {
+        if (!cancelled) {
+          setSearchResults([]);
+          setSearchError(getErrorMessage(err, "Search failed"));
+        }
+      } finally {
+        if (!cancelled) setIsSearching(false);
+      }
     }, 300);
 
-    return () => clearTimeout(timeoutId);
-  }, [searchQuery, handleSearch]);
+    return () => {
+      cancelled = true;
+      clearTimeout(timeoutId);
+    };
+  }, [searchQuery]);
 
-  const displayedMeetings = searchQuery.trim() ? searchResults : meetings;
   const isShowingSearchResults = searchQuery.trim().length > 0;
+  const displayedMeetings = isShowingSearchResults ? searchResults : meetings;
 
   return (
     <div className="space-y-6">
@@ -152,12 +171,12 @@ export default function Home() {
         <div>
           <h1 className="text-3xl font-bold text-gray-900">Meeting Dashboard</h1>
           <p className="text-gray-600 mt-1">
-            {meetings.length} meetings analyzed
+            {meetings.length} meeting{meetings.length !== 1 ? "s" : ""}
           </p>
         </div>
         <Link
           href="/upload"
-          className="inline-flex items-center px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors duration-200"
+          className="inline-flex items-center justify-center px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors duration-200"
         >
           <PlusIcon className="h-5 w-5 mr-2" />
           Upload New Meeting
@@ -170,11 +189,12 @@ export default function Home() {
           <MagnifyingGlassIcon className="h-5 w-5 text-gray-400" />
         </div>
         <input
-          type="text"
+          type="search"
+          aria-label="Search meetings"
           placeholder="Search meetings by content, filename, or keywords..."
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
-          className="block w-full pl-10 pr-3 py-3 border border-gray-300 rounded-lg leading-5 bg-white placeholder-gray-500 focus:outline-none focus:placeholder-gray-400 focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
+          className="block w-full pl-10 pr-10 py-3 border border-gray-300 rounded-lg leading-5 bg-white placeholder-gray-500 focus:outline-none focus:placeholder-gray-400 focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
         />
         {isSearching && (
           <div className="absolute inset-y-0 right-0 pr-3 flex items-center">
@@ -185,22 +205,20 @@ export default function Home() {
 
       {/* Search Results Info */}
       {isShowingSearchResults && (
-        <div className="text-sm text-gray-600">
-          {isSearching ? (
-            "Searching..."
-          ) : (
-            `Found ${searchResults.length} meeting${searchResults.length !== 1 ? 's' : ''} matching "${searchQuery}"`
-          )}
+        <div className={`text-sm ${searchError ? "text-red-700" : "text-gray-600"}`}>
+          {isSearching
+            ? "Searching..."
+            : searchError
+              ? searchError
+              : `Found ${searchResults.length} meeting${searchResults.length !== 1 ? "s" : ""} matching "${searchQuery.trim()}"`}
         </div>
       )}
 
       {/* Error State */}
       {error && (
         <div className="bg-red-50 border border-red-200 rounded-lg p-4">
-          <div className="flex">
-            <div className="text-sm text-red-700">
-              <strong>Error:</strong> {error}
-            </div>
+          <div className="text-sm text-red-700">
+            <strong>Error:</strong> {error}
           </div>
           <button
             onClick={fetchMeetings}
@@ -221,7 +239,7 @@ export default function Home() {
       )}
 
       {/* Empty State */}
-      {!loading && !error && displayedMeetings.length === 0 && (
+      {!loading && !error && !isSearching && !searchError && displayedMeetings.length === 0 && (
         <div className="text-center py-12">
           <div className="mx-auto h-24 w-24 bg-gray-100 rounded-full flex items-center justify-center mb-6">
             {isShowingSearchResults ? (
@@ -234,7 +252,7 @@ export default function Home() {
             <div>
               <h3 className="text-lg font-medium text-gray-900 mb-2">No meetings found</h3>
               <p className="text-gray-500 mb-6">
-                No meetings match your search for "{searchQuery}"
+                No meetings match your search for &ldquo;{searchQuery.trim()}&rdquo;
               </p>
               <button
                 onClick={() => setSearchQuery("")}

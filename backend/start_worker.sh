@@ -1,10 +1,4 @@
 #!/bin/bash
-
-# Start the health check server in the background
-python app/worker_health_server.py &
-
-# Wait a moment for health server to start
-sleep 2
-
-# Start the main worker process (this will run in foreground)
-exec python app/worker.py
+# The worker serves its health endpoint (WORKER_HEALTH_PORT, default 8001)
+# from the same process, so a single command starts everything.
+exec python -m app.worker

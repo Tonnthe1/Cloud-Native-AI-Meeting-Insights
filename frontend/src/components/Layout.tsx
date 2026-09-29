@@ -21,17 +21,17 @@ export default function Layout({ children }: LayoutProps) {
               <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center">
                 <span className="text-white font-bold text-sm">MI</span>
               </div>
-              <span className="font-semibold text-lg text-gray-900">
+              <span className="hidden sm:inline font-semibold text-lg text-gray-900">
                 Meeting Insights
               </span>
             </Link>
 
             {/* Navigation Links */}
-            <div className="flex space-x-8">
+            <div className="flex space-x-1 sm:space-x-8">
               <Link
                 href="/"
-                className={`px-3 py-2 rounded-md text-sm font-medium transition-colors duration-200 ${
-                  pathname === "/"
+                className={`px-2 sm:px-3 py-2 rounded-md text-sm font-medium transition-colors duration-200 ${
+                  pathname === "/" || pathname.startsWith("/meeting/")
                     ? "bg-blue-100 text-blue-700"
                     : "text-gray-500 hover:text-gray-900 hover:bg-gray-100"
                 }`}
@@ -40,7 +40,7 @@ export default function Layout({ children }: LayoutProps) {
               </Link>
               <Link
                 href="/upload"
-                className={`px-3 py-2 rounded-md text-sm font-medium transition-colors duration-200 ${
+                className={`px-2 sm:px-3 py-2 rounded-md text-sm font-medium transition-colors duration-200 ${
                   pathname === "/upload"
                     ? "bg-blue-100 text-blue-700"
                     : "text-gray-500 hover:text-gray-900 hover:bg-gray-100"
@@ -50,7 +50,7 @@ export default function Layout({ children }: LayoutProps) {
               </Link>
               <Link
                 href="/language-samples"
-                className={`px-3 py-2 rounded-md text-sm font-medium transition-colors duration-200 ${
+                className={`px-2 sm:px-3 py-2 rounded-md text-sm font-medium transition-colors duration-200 ${
                   pathname === "/language-samples"
                     ? "bg-blue-100 text-blue-700"
                     : "text-gray-500 hover:text-gray-900 hover:bg-gray-100"
