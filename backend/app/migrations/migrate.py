@@ -7,11 +7,12 @@ import os
 import sys
 import logging
 from pathlib import Path
-from sqlalchemy import create_engine, text
+from sqlalchemy import text
 
-# Add the app directory to the path
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from app.db import DATABASE_URL  # noqa: E402
+# Make the backend root importable when run as a script
+sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(
+    os.path.abspath(__file__)))))
+from app.db import engine  # noqa: E402
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -20,7 +21,11 @@ logger = logging.getLogger(__name__)
 def run_migrations():
     """Run all SQL migration files in order."""
 
-    engine = create_engine(DATABASE_URL)
+    if engine.dialect.name != "postgresql":
+        # The migrations use PostgreSQL features (pg_trgm, GIN indexes).
+        logger.info(f"Skipping migrations for {engine.dialect.name}")
+        return
+
     migrations_dir = Path(__file__).parent
 
     # Get all SQL files sorted by name

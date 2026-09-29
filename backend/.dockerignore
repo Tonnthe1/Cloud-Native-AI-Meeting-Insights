@@ -2,3 +2,7 @@ __pycache__
 .venv
 *.pyc
 *.pyo
+uploads
+app/uploads
+tests
+.pytest_cache

@@ -5,19 +5,23 @@ from typing import Dict, Any, Optional
 from datetime import datetime, timezone
 
 
-def get_redis_client():
-    redis_host = os.getenv("REDIS_HOST", "localhost")
-    redis_port = int(os.getenv("REDIS_PORT", "6379"))
-    redis_db = int(os.getenv("REDIS_DB", "0"))
-    redis_password = os.getenv("REDIS_PASSWORD", None)
+def get_redis_client(**overrides) -> redis.Redis:
+    """Create a Redis client from REDIS_* env vars.
 
-    return redis.Redis(
-        host=redis_host,
-        port=redis_port,
-        db=redis_db,
-        password=redis_password,
-        decode_responses=True
-    )
+    Keyword arguments override the defaults, e.g. socket_timeout for callers
+    that must not block for long when Redis is unreachable.
+    """
+    options = {
+        "host": os.getenv("REDIS_HOST", "localhost"),
+        "port": int(os.getenv("REDIS_PORT", "6379")),
+        "db": int(os.getenv("REDIS_DB", "0")),
+        "password": os.getenv("REDIS_PASSWORD") or None,
+        "decode_responses": True,
+        "socket_connect_timeout": 5,
+        "health_check_interval": 30,
+    }
+    options.update(overrides)
+    return redis.Redis(**options)
 
 
 class TaskQueue:
@@ -93,14 +97,18 @@ class TaskQueue:
             self.redis.setex(f"job:{job_id}", 3600, json.dumps(job_data))
 
     def fail_job(self, job_id: str, error_message: str,
-                 retry: bool = True):
-        """Mark a job as failed and optionally retry."""
+                 retry: bool = True) -> Optional[str]:
+        """Mark a job as failed and optionally retry.
+
+        Returns the job's new status ("queued" when it will be retried,
+        "failed" when attempts are exhausted), or None if the job is unknown.
+        """
         self.redis.srem(self.processing_set, job_id)
 
         # Get current job data
         job_json = self.redis.get(f"job:{job_id}")
         if not job_json:
-            return
+            return None
 
         job_data = json.loads(job_json)
         job_data["attempts"] += 1
@@ -116,6 +124,7 @@ class TaskQueue:
             job_data["status"] = "failed"
 
         self.redis.setex(f"job:{job_id}", 3600, json.dumps(job_data))
+        return job_data["status"]
 
     def get_job_status(self, job_id: str) -> Optional[Dict[str, Any]]:
         """Get the current status of a job."""

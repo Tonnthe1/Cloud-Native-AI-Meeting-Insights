@@ -4,33 +4,35 @@ Meeting Processing Worker Service
 
 This worker service:
 - Pulls tasks from a Redis queue
-- Runs faster-whisper transcription
-- Generates summary using OpenAI
-- Updates the Postgres DB record
-- Has retry logic, logging, and health check endpoint
+- Runs faster-whisper transcription, summarization and keyword extraction
+- Records the meeting's status (processing/completed/failed) and results in
+  the Postgres DB record
+- Has retry logic, logging, and a health check endpoint (served from the
+  same process so it reflects the worker's real state)
+
+Run from the backend directory with: python -m app.worker
 """
 
 import os
 import sys
 import logging
-import traceback
 import signal
 import threading
 import time
-from pathlib import Path
 from typing import Optional, Dict, Any
 from datetime import datetime, timezone
 
-import openai
 from fastapi import FastAPI
-from faster_whisper import WhisperModel
-# Add the app directory to the path so we can import our modules
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
+# Make the backend root importable when run as a script (python app/worker.py)
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(
+    __file__))))
+
+from app import processing  # noqa: E402
+from app.cache import invalidate_meeting_caches  # noqa: E402
 from app.db import SessionLocal  # noqa: E402
-from app.models import Meeting  # noqa: E402
+from app.models import Meeting, MeetingStatus  # noqa: E402
 from app.redis_client import get_redis_client, TaskQueue  # noqa: E402
-from app.util import get_audio_duration_seconds, extract_keywords  # noqa: E402
 
 
 # Configure logging
@@ -41,26 +43,12 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Global variables
-_fw_model: Optional[WhisperModel] = None
 _task_queue: Optional[TaskQueue] = None
 _worker_running = False
 _worker_thread: Optional[threading.Thread] = None
 
 # FastAPI app for health checks
 app = FastAPI(title="Meeting Processing Worker")
-
-
-def load_whisper_model():
-    """Load the faster-whisper model."""
-    global _fw_model
-
-    model_name = os.getenv("FW_MODEL", "base.en")
-    compute_type = os.getenv("FW_COMPUTE_TYPE", "float32")
-
-    logger.info(f"Loading faster-whisper model: {model_name}")
-    _fw_model = WhisperModel(model_name, device="cpu",
-                             compute_type=compute_type)
-    logger.info("Model loaded successfully")
 
 
 def initialize_services():
@@ -70,7 +58,6 @@ def initialize_services():
     logger.info("Initializing Redis connection...")
     redis_client = get_redis_client()
     _task_queue = TaskQueue(redis_client)
-    logger.info("Redis connection established")
 
     # Test Redis connection
     try:
@@ -81,125 +68,36 @@ def initialize_services():
         raise
 
 
-def _to_wav_16k_mono(src: Path) -> Path:
-    """Convert audio file to 16kHz mono WAV format."""
-    import subprocess
-
-    wav = src.with_suffix(".wav")
-    cmd = ["ffmpeg", "-y", "-i", str(src), "-ar", "16000", "-ac", "1",
-           str(wav)]
-
-    try:
-        subprocess.run(cmd, check=True, capture_output=True)
-        logger.info(f"Converted {src} to {wav}")
-        return wav
-    except subprocess.CalledProcessError as e:
-        logger.error(f"FFmpeg conversion failed: {e.stderr.decode()}")
-        raise
-
-
-def transcribe_audio(file_path: str) -> tuple[str, Optional[str]]:
-    """Transcribe audio file using faster-whisper."""
-    if _fw_model is None:
-        raise RuntimeError("faster-whisper model not loaded")
-
-    src_path = Path(file_path)
-    if not src_path.exists():
-        raise FileNotFoundError(f"Audio file not found: {file_path}")
-
-    logger.info(f"Starting transcription of {file_path}")
-
-    # Convert to WAV format
-    wav_path = _to_wav_16k_mono(src_path)
-
-    try:
-        # Transcribe
-        segments, info = _fw_model.transcribe(
-            str(wav_path),
-            beam_size=5,
-            vad_filter=True,
-        )
-
-        # Extract text and language
-        parts = [seg.text for seg in segments]
-        transcript = " ".join(parts).strip()
-        language = getattr(info, "language", None)
-
-        logger.info(f"Transcription completed. Language: {language}, "
-                    f"Length: {len(transcript)} chars")
-        return transcript, language
-
-    finally:
-        # Clean up temporary WAV file
-        if wav_path.exists() and wav_path != src_path:
-            wav_path.unlink()
-
-
-def generate_summary(transcript: str) -> str:
-    """Generate summary using OpenAI."""
-    if not transcript.strip():
-        return ""
-
-    logger.info("Generating summary with OpenAI")
-
-    prompt = (
-        "Summarize the following meeting transcript in bullet points, "
-        "highlight action items, key decisions, and follow-up tasks. "
-        "Use clear English. Transcript:\n"
-        + transcript
-    )
-
-    try:
-        completion = openai.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": "system", "content": "You are a meeting assistant."},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0.2,
-            max_tokens=512
-        )
-
-        summary = completion.choices[0].message.content or ""
-        logger.info(f"Summary generated: {len(summary)} chars")
-        return summary
-
-    except Exception as e:
-        logger.error(f"Summary generation failed: {e}")
-        return "Summary generation failed"
-
-
-def update_meeting_record(meeting_id: int, transcript: str, summary: str,
-                          language: Optional[str], duration: Optional[float],
-                          keywords: Optional[str]) -> bool:
-    """Update the meeting record in the database."""
+def _update_meeting(meeting_id: int, update) -> bool:
+    """Apply update(meeting) and commit. Returns False if the meeting no
+    longer exists (e.g. it was deleted while queued)."""
     db = SessionLocal()
     try:
         meeting = db.get(Meeting, meeting_id)
-        if not meeting:
-            logger.error(f"Meeting {meeting_id} not found in database")
+        if meeting is None:
             return False
-
-        # Update fields
-        meeting.transcript = transcript
-        meeting.summary = summary
-        if language:
-            meeting.language = language
-        if duration is not None:
-            meeting.duration_seconds = duration
-        if keywords:
-            meeting.keywords = keywords
-
+        update(meeting)
         db.commit()
-        logger.info(f"Meeting {meeting_id} updated successfully")
         return True
-
-    except Exception as e:
-        logger.error(f"Database update failed for meeting {meeting_id}: {e}")
+    except Exception:
         db.rollback()
-        return False
+        raise
     finally:
         db.close()
+
+
+def set_meeting_status(meeting_id: int, status: str,
+                       error_message: Optional[str] = None) -> bool:
+    def update(meeting: Meeting):
+        meeting.status = status
+        meeting.error_message = error_message
+
+    return _update_meeting(meeting_id, update)
+
+
+def _invalidate_caches():
+    if _task_queue is not None:
+        invalidate_meeting_caches(_task_queue.redis)
 
 
 def process_meeting_job(job_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -210,43 +108,51 @@ def process_meeting_job(job_data: Dict[str, Any]) -> Dict[str, Any]:
 
     logger.info(f"Processing job {job_id} for meeting {meeting_id}")
 
+    if not set_meeting_status(meeting_id, MeetingStatus.PROCESSING):
+        logger.warning(f"Meeting {meeting_id} no longer exists; "
+                       f"skipping job {job_id}")
+        return {"skipped": "meeting deleted"}
+    _invalidate_caches()
+
+    result = processing.process_audio(file_path)
+
+    if not _update_meeting(meeting_id,
+                           lambda m: processing.apply_result(m, result)):
+        logger.warning(f"Meeting {meeting_id} was deleted during "
+                       f"processing; discarding results of job {job_id}")
+        return {"skipped": "meeting deleted"}
+    _invalidate_caches()
+
+    logger.info(f"Job {job_id} completed successfully")
+    return {
+        "transcript_length": len(result.transcript),
+        "language": result.language,
+        "summary_length": len(result.summary),
+        "keywords_count": len(result.keywords),
+        "duration_seconds": result.duration_seconds,
+    }
+
+
+def handle_job_failure(job_data: Dict[str, Any], error: Exception) -> None:
+    """Record a failed attempt: re-queue the job if it has attempts left,
+    and mirror that on the meeting's status."""
+    job_id = job_data["id"]
+    error_msg = str(error) or error.__class__.__name__
+    new_status = _task_queue.fail_job(job_id, error_msg, retry=True)
+
+    retrying = new_status == "queued"
+    logger.error(f"Job {job_id} failed "
+                 f"({'will retry' if retrying else 'giving up'}): "
+                 f"{error_msg}")
     try:
-        # Transcribe audio
-        transcript, language = transcribe_audio(file_path)
-
-        # Generate summary
-        summary = generate_summary(transcript)
-
-        # Extract keywords
-        keywords_list = extract_keywords(transcript, top_k=8)
-        keywords_str = ",".join(keywords_list) if keywords_list else None
-
-        # Get audio duration
-        duration = get_audio_duration_seconds(file_path)
-
-        # Update database
-        success = update_meeting_record(
-            meeting_id, transcript, summary, language, duration, keywords_str
+        set_meeting_status(
+            job_data["meeting_id"],
+            MeetingStatus.QUEUED if retrying else MeetingStatus.FAILED,
+            error_message=error_msg,
         )
-
-        if not success:
-            raise Exception("Failed to update database record")
-
-        result = {
-            "transcript_length": len(transcript),
-            "language": language,
-            "summary_length": len(summary),
-            "keywords_count": len(keywords_list) if keywords_list else 0,
-            "duration_seconds": duration
-        }
-
-        logger.info(f"Job {job_id} completed successfully")
-        return result
-
-    except Exception as e:
-        logger.error(f"Job {job_id} failed: {e}")
-        logger.error(traceback.format_exc())
-        raise
+        _invalidate_caches()
+    except Exception:
+        logger.exception(f"Could not record failure of job {job_id}")
 
 
 def worker_loop():
@@ -267,25 +173,16 @@ def worker_loop():
             logger.info(f"Picked up job: {job_id}")
 
             try:
-                # Process the job
                 result = process_meeting_job(job_data)
-
-                # Mark as completed
                 _task_queue.complete_job(job_id, result)
                 logger.info(f"Job {job_id} marked as completed")
 
             except Exception as e:
-                # Mark as failed (with retry if attempts remaining)
-                error_msg = str(e)
-                _task_queue.fail_job(job_id, error_msg, retry=True)
-                logger.error(f"Job {job_id} failed: {error_msg}")
+                logger.exception(f"Job {job_id} raised an error")
+                handle_job_failure(job_data, e)
 
-        except KeyboardInterrupt:
-            logger.info("Worker interrupted by user")
-            break
-        except Exception as e:
-            logger.error(f"Worker loop error: {e}")
-            logger.error(traceback.format_exc())
+        except Exception:
+            logger.exception("Worker loop error")
             # Sleep briefly before retrying
             time.sleep(5)
 
@@ -340,7 +237,7 @@ def health_check():
         "status": "healthy",
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "worker_running": _worker_running,
-        "model_loaded": _fw_model is not None,
+        "model_loaded": processing.is_model_loaded(),
         "redis_connected": False,
         "queue_length": 0,
         "processing_count": 0
@@ -370,8 +267,20 @@ def get_stats():
         "queue_length": _task_queue.get_queue_length(),
         "processing_count": _task_queue.get_processing_count(),
         "worker_running": _worker_running,
-        "model_loaded": _fw_model is not None
+        "model_loaded": processing.is_model_loaded()
     }
+
+
+def start_health_server():
+    """Serve the health endpoints from a background thread."""
+    import uvicorn
+
+    port = int(os.getenv("WORKER_HEALTH_PORT", "8001"))
+    server = uvicorn.Server(uvicorn.Config(app, host="0.0.0.0", port=port,
+                                           log_level="warning"))
+    threading.Thread(target=server.run, name="health-server",
+                     daemon=True).start()
+    logger.info(f"Health server listening on port {port}")
 
 
 def main():
@@ -383,15 +292,15 @@ def main():
     signal.signal(signal.SIGTERM, signal_handler)
 
     try:
-        # Initialize OpenAI
-        openai.api_key = os.getenv("OPENAI_API_KEY")
-        if not openai.api_key:
-            logger.warning("OPENAI_API_KEY not set - summary generation "
-                           "will fail")
+        if not os.getenv("OPENAI_API_KEY"):
+            logger.warning("OPENAI_API_KEY not set - summaries will be "
+                           "extractive instead of AI-generated")
+
+        start_health_server()
 
         # Initialize services
         initialize_services()
-        load_whisper_model()
+        processing.get_whisper_model()
 
         # Start the worker
         start_worker()
@@ -402,9 +311,8 @@ def main():
         while _worker_running:
             time.sleep(1)
 
-    except Exception as e:
-        logger.error(f"Worker initialization failed: {e}")
-        logger.error(traceback.format_exc())
+    except Exception:
+        logger.exception("Worker initialization failed")
         sys.exit(1)
     finally:
         stop_worker()
