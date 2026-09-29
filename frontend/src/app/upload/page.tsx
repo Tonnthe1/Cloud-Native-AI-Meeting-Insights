@@ -1,7 +1,8 @@
 "use client";
 
 import React, { useState, useRef } from "react";
-import { meetingService } from "@/lib/api";
+import { meetingService, getErrorMessage } from "@/lib/api";
+import { AUDIO_EXTENSIONS, formatFileSize, isAudioFile } from "@/lib/format";
 import { useRouter } from "next/navigation";
 import {
   CloudArrowUpIcon,
@@ -11,14 +12,28 @@ import {
   ArrowPathIcon
 } from "@heroicons/react/24/outline";
 
+type Phase = "idle" | "uploading" | "done";
+
 export default function UploadPage() {
   const router = useRouter();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [file, setFile] = useState<File | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [phase, setPhase] = useState<Phase>("idle");
   const [error, setError] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
+
+  const busy = phase !== "idle";
+
+  const selectFile = (candidate: File | undefined) => {
+    if (!candidate) return;
+    if (!isAudioFile(candidate)) {
+      setError(`"${candidate.name}" doesn't look like an audio file. Supported formats: ${AUDIO_EXTENSIONS.join(", ")}`);
+      return;
+    }
+    setFile(candidate);
+    setError(null);
+  };
 
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
@@ -33,32 +48,12 @@ export default function UploadPage() {
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
     setDragOver(false);
-    
-    const droppedFiles = Array.from(e.dataTransfer.files);
-    const audioFile = droppedFiles.find(file => file.type.startsWith('audio/'));
-    
-    if (audioFile) {
-      setFile(audioFile);
-      setError(null);
-    } else {
-      setError("Please drop an audio file");
-    }
+    if (busy) return;
+    selectFile(e.dataTransfer.files[0]);
   };
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const selectedFile = e.target.files?.[0];
-    if (selectedFile) {
-      setFile(selectedFile);
-      setError(null);
-    }
-  };
-
-  const formatFileSize = (bytes: number) => {
-    if (bytes === 0) return '0 Bytes';
-    const k = 1024;
-    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+    selectFile(e.target.files?.[0]);
   };
 
   const handleUpload = async (e: React.FormEvent) => {
@@ -69,36 +64,20 @@ export default function UploadPage() {
     }
 
     try {
-      setLoading(true);
+      setPhase("uploading");
       setError(null);
       setUploadProgress(0);
-      
-      // Simulate upload progress (since we can't get real progress from the API easily)
-      const progressInterval = setInterval(() => {
-        setUploadProgress(prev => {
-          if (prev >= 90) {
-            clearInterval(progressInterval);
-            return 90;
-          }
-          return prev + 10;
-        });
-      }, 200);
-      
-      const result = await meetingService.analyzeMeeting(file);
-      
-      clearInterval(progressInterval);
-      setUploadProgress(100);
-      
-      // Brief delay to show completion
-      setTimeout(() => {
-        router.push("/");
-      }, 1000);
-      
-    } catch (err: any) {
+
+      const result = await meetingService.analyzeMeeting(file, setUploadProgress);
+
+      // Processing continues in the background; the meeting page shows
+      // live status until the transcript and summary are ready.
+      setPhase("done");
+      router.push(`/meeting/${result.meeting_id}`);
+    } catch (err) {
+      setPhase("idle");
       setUploadProgress(0);
-      setError(err?.response?.data?.detail || err.message || "Upload failed");
-    } finally {
-      setLoading(false);
+      setError(getErrorMessage(err, "Upload failed"));
     }
   };
 
@@ -121,14 +100,14 @@ export default function UploadPage() {
       </div>
 
       {/* Upload Form */}
-      <div className="bg-white rounded-lg border border-gray-200 p-8">
+      <div className="bg-white rounded-lg border border-gray-200 p-6 sm:p-8">
         <form onSubmit={handleUpload} className="space-y-6">
           {/* File Drop Zone */}
           <div
             onDragOver={handleDragOver}
             onDragLeave={handleDragLeave}
             onDrop={handleDrop}
-            className={`relative border-2 border-dashed rounded-lg p-8 text-center transition-colors duration-200 ${
+            className={`relative border-2 border-dashed rounded-lg p-8 text-center transition-colors duration-200 focus-within:ring-2 focus-within:ring-blue-500 ${
               dragOver
                 ? "border-blue-400 bg-blue-50"
                 : "border-gray-300 hover:border-gray-400"
@@ -137,17 +116,18 @@ export default function UploadPage() {
             <input
               ref={fileInputRef}
               type="file"
-              accept="audio/*"
+              aria-label="Choose an audio file"
+              accept={["audio/*", ...AUDIO_EXTENSIONS].join(",")}
               onChange={handleFileSelect}
-              disabled={loading}
+              disabled={busy}
               className="absolute inset-0 w-full h-full opacity-0 cursor-pointer disabled:cursor-not-allowed"
             />
-            
+
             <div className="space-y-4">
               <div className="mx-auto h-12 w-12 flex items-center justify-center rounded-full bg-gray-100">
                 <CloudArrowUpIcon className="h-6 w-6 text-gray-600" />
               </div>
-              
+
               <div>
                 <p className="text-lg font-medium text-gray-900">
                   Drop your audio file here, or click to browse
@@ -162,19 +142,20 @@ export default function UploadPage() {
           {/* Selected File Info */}
           {file && (
             <div className="bg-gray-50 rounded-lg p-4">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center space-x-3">
-                  <DocumentIcon className="h-8 w-8 text-blue-600" />
-                  <div>
-                    <p className="font-medium text-gray-900">{file.name}</p>
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex items-center space-x-3 min-w-0">
+                  <DocumentIcon className="h-8 w-8 shrink-0 text-blue-600" />
+                  <div className="min-w-0">
+                    <p className="font-medium text-gray-900 truncate">{file.name}</p>
                     <p className="text-sm text-gray-500">{formatFileSize(file.size)}</p>
                   </div>
                 </div>
                 <button
                   type="button"
                   onClick={removeFile}
-                  disabled={loading}
-                  className="text-gray-400 hover:text-red-500 disabled:opacity-50"
+                  disabled={busy}
+                  aria-label="Remove file"
+                  className="text-xl leading-none text-gray-400 hover:text-red-500 disabled:opacity-50"
                 >
                   ×
                 </button>
@@ -183,33 +164,44 @@ export default function UploadPage() {
           )}
 
           {/* Upload Progress */}
-          {loading && uploadProgress > 0 && (
+          {busy && (
             <div className="space-y-2">
-              <div className="flex justify-between text-sm">
-                <span className="text-gray-600">Processing...</span>
-                <span className="text-gray-600">{uploadProgress}%</span>
+              <div className="flex justify-between text-sm text-gray-600">
+                <span>{phase === "done" ? "Upload complete" : "Uploading..."}</span>
+                <span>{uploadProgress}%</span>
               </div>
-              <div className="w-full bg-gray-200 rounded-full h-2">
-                <div 
+              <div
+                className="w-full bg-gray-200 rounded-full h-2"
+                role="progressbar"
+                aria-valuenow={uploadProgress}
+                aria-valuemin={0}
+                aria-valuemax={100}
+              >
+                <div
                   className="bg-blue-600 h-2 rounded-full transition-all duration-300 ease-out"
                   style={{ width: `${uploadProgress}%` }}
                 ></div>
               </div>
-              <p className="text-sm text-gray-500 text-center">
-                {uploadProgress < 30 && "Uploading file..."}
-                {uploadProgress >= 30 && uploadProgress < 60 && "Transcribing audio..."}
-                {uploadProgress >= 60 && uploadProgress < 90 && "Generating summary..."}
-                {uploadProgress >= 90 && uploadProgress < 100 && "Finishing up..."}
-                {uploadProgress === 100 && "Complete! Redirecting..."}
+              <p className="text-sm text-gray-500 text-center flex items-center justify-center">
+                {phase === "done" ? (
+                  <>
+                    <CheckCircleIcon className="h-4 w-4 mr-1 text-green-600" />
+                    Queued for processing. Opening the meeting…
+                  </>
+                ) : uploadProgress < 100 ? (
+                  "Sending your recording..."
+                ) : (
+                  "Saving and queueing your recording..."
+                )}
               </p>
             </div>
           )}
 
           {/* Error Message */}
           {error && (
-            <div className="bg-red-50 border border-red-200 rounded-lg p-4">
-              <div className="flex items-center">
-                <ExclamationCircleIcon className="h-5 w-5 text-red-600 mr-2" />
+            <div className="bg-red-50 border border-red-200 rounded-lg p-4" role="alert">
+              <div className="flex items-start">
+                <ExclamationCircleIcon className="h-5 w-5 shrink-0 text-red-600 mr-2" />
                 <span className="text-sm text-red-700">{error}</span>
               </div>
             </div>
@@ -218,13 +210,13 @@ export default function UploadPage() {
           {/* Submit Button */}
           <button
             type="submit"
-            disabled={loading || !file}
+            disabled={busy || !file}
             className="w-full flex items-center justify-center px-4 py-3 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors duration-200"
           >
-            {loading ? (
+            {busy ? (
               <>
                 <ArrowPathIcon className="animate-spin h-5 w-5 mr-2" />
-                Processing...
+                Uploading...
               </>
             ) : (
               <>

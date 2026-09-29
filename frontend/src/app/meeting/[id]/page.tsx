@@ -1,10 +1,13 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { useRouter, useParams } from "next/navigation";
-import { meetingService, MeetingDetail } from "@/lib/api";
+import { meetingService, MeetingDetail, getErrorMessage, isPending } from "@/lib/api";
+import { formatDate, formatDuration } from "@/lib/format";
+import StatusBadge from "@/components/StatusBadge";
 import { 
   ArrowLeftIcon, 
+  ArrowPathIcon,
   TrashIcon, 
   CalendarIcon,
   ClockIcon,
@@ -13,6 +16,9 @@ import {
   DocumentTextIcon,
   ExclamationTriangleIcon
 } from "@heroicons/react/24/outline";
+
+// How often to check on a meeting that's still being processed.
+const POLL_INTERVAL_MS = 3000;
 
 // Loading skeleton
 function DetailSkeleton() {
@@ -55,27 +61,40 @@ function DeleteModal({
   onClose, 
   onConfirm, 
   filename,
-  isDeleting 
+  isDeleting,
+  error
 }: {
   isOpen: boolean;
   onClose: () => void;
   onConfirm: () => void;
   filename: string;
   isDeleting: boolean;
+  error: string | null;
 }) {
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
-      <div className="bg-white rounded-lg max-w-md w-full p-6">
+    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+      <div
+        className="bg-white rounded-lg max-w-md w-full p-6"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="delete-meeting-title"
+      >
         <div className="flex items-center mb-4">
           <ExclamationTriangleIcon className="h-6 w-6 text-red-600 mr-3" />
-          <h3 className="text-lg font-semibold text-gray-900">Delete Meeting</h3>
+          <h3 id="delete-meeting-title" className="text-lg font-semibold text-gray-900">Delete Meeting</h3>
         </div>
         
-        <p className="text-gray-600 mb-6">
-          Are you sure you want to delete "{filename}"? This action cannot be undone.
+        <p className="text-gray-600 mb-6 break-words">
+          Are you sure you want to delete &ldquo;{filename}&rdquo;? This action cannot be undone.
         </p>
+
+        {error && (
+          <p className="text-sm text-red-700 bg-red-50 border border-red-200 rounded p-3 mb-4" role="alert">
+            {error}
+          </p>
+        )}
         
         <div className="flex justify-end space-x-3">
           <button
@@ -111,53 +130,50 @@ export default function MeetingDetailPage() {
   const [error, setError] = useState<string | null>(null);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  const fetchMeeting = useCallback(async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      setMeeting(await meetingService.getMeeting(parseInt(id)));
+    } catch (err) {
+      setError(getErrorMessage(err, "Failed to fetch meeting details"));
+    } finally {
+      setLoading(false);
+    }
+  }, [id]);
 
   useEffect(() => {
     if (id) {
       fetchMeeting();
     }
-  }, [id]);
+  }, [id, fetchMeeting]);
 
-  const fetchMeeting = async () => {
-    try {
-      setLoading(true);
-      setError(null);
-      const data = await meetingService.getMeeting(parseInt(id));
-      setMeeting(data);
-    } catch (err: any) {
-      setError(err?.response?.data?.detail || err.message || "Failed to fetch meeting details");
-    } finally {
-      setLoading(false);
-    }
-  };
+  // While the meeting is queued or processing, refresh it in the background
+  // so the transcript and summary appear as soon as they're ready.
+  const pending = meeting ? isPending(meeting.status) : false;
+  useEffect(() => {
+    if (!pending) return;
+    const intervalId = setInterval(() => {
+      meetingService.getMeeting(parseInt(id)).then(setMeeting).catch(() => {
+        // Transient failures are fine; the next poll will retry.
+      });
+    }, POLL_INTERVAL_MS);
+    return () => clearInterval(intervalId);
+  }, [pending, id]);
 
   const handleDelete = async () => {
     try {
       setIsDeleting(true);
+      setDeleteError(null);
       await meetingService.deleteMeeting(parseInt(id));
       router.push("/");
-    } catch (err: any) {
-      setError(err?.response?.data?.detail || err.message || "Failed to delete meeting");
-      setShowDeleteModal(false);
+    } catch (err) {
+      setDeleteError(getErrorMessage(err, "Failed to delete meeting"));
     } finally {
       setIsDeleting(false);
     }
-  };
-
-  const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'long',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit'
-    });
-  };
-
-  const formatDuration = (seconds: number) => {
-    const minutes = Math.floor(seconds / 60);
-    const remainingSeconds = Math.floor(seconds % 60);
-    return `${minutes}:${remainingSeconds.toString().padStart(2, '0')}`;
   };
 
   if (loading) {
@@ -200,24 +216,51 @@ export default function MeetingDetailPage() {
         <div className="flex items-start space-x-4">
           <button
             onClick={() => router.push("/")}
+            aria-label="Back to meetings"
             className="mt-1 p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors duration-200"
           >
             <ArrowLeftIcon className="h-5 w-5" />
           </button>
-          <div>
-            <h1 className="text-3xl font-bold text-gray-900">{meeting.filename}</h1>
-            <p className="text-gray-600 mt-1">Meeting Details</p>
+          <div className="min-w-0">
+            <h1 className="text-3xl font-bold text-gray-900 break-all">{meeting.filename}</h1>
+            <div className="flex items-center gap-2 mt-1">
+              <p className="text-gray-600">Meeting Details</p>
+              <StatusBadge status={meeting.status} />
+            </div>
           </div>
         </div>
         
         <button
-          onClick={() => setShowDeleteModal(true)}
-          className="inline-flex items-center px-4 py-2 bg-red-600 text-white text-sm font-medium rounded-lg hover:bg-red-700 transition-colors duration-200"
+          onClick={() => {
+            setDeleteError(null);
+            setShowDeleteModal(true);
+          }}
+          className="inline-flex items-center justify-center px-4 py-2 bg-red-600 text-white text-sm font-medium rounded-lg hover:bg-red-700 transition-colors duration-200"
         >
           <TrashIcon className="h-4 w-4 mr-2" />
           Delete Meeting
         </button>
       </div>
+
+      {/* Processing Status */}
+      {pending && (
+        <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 flex items-center text-sm text-amber-800">
+          <ArrowPathIcon className="h-5 w-5 mr-2 shrink-0 animate-spin" />
+          {meeting.status === "queued"
+            ? "Waiting for a worker to pick up this recording."
+            : "Transcribing and summarizing this recording."}{" "}
+          This page updates automatically.
+        </div>
+      )}
+      {meeting.status === "failed" && (
+        <div className="bg-red-50 border border-red-200 rounded-lg p-4 flex items-start text-sm text-red-700" role="alert">
+          <ExclamationTriangleIcon className="h-5 w-5 mr-2 shrink-0" />
+          <div>
+            <strong>Processing failed.</strong>{" "}
+            {meeting.error_message || "The recording could not be processed."}
+          </div>
+        </div>
+      )}
 
       {/* Meeting Metadata */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -227,11 +270,11 @@ export default function MeetingDetailPage() {
             Date
           </div>
           <div className="font-semibold text-gray-900">
-            {formatDate(meeting.created_at)}
+            {formatDate(meeting.created_at, "long")}
           </div>
         </div>
 
-        {meeting.duration_seconds && (
+        {meeting.duration_seconds != null && (
           <div className="bg-white rounded-lg border border-gray-200 p-4">
             <div className="flex items-center text-sm text-gray-500 mb-1">
               <ClockIcon className="h-4 w-4 mr-1" />
@@ -273,9 +316,9 @@ export default function MeetingDetailPage() {
         <div className="bg-white rounded-lg border border-gray-200 p-6">
           <h2 className="text-lg font-semibold text-gray-900 mb-4">Keywords</h2>
           <div className="flex flex-wrap gap-2">
-            {meeting.keywords.map((keyword, index) => (
+            {meeting.keywords.map((keyword) => (
               <span
-                key={index}
+                key={keyword}
                 className="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-blue-100 text-blue-800"
               >
                 {keyword}
@@ -298,7 +341,7 @@ export default function MeetingDetailPage() {
               {meeting.summary}
             </div>
           ) : (
-            <p className="text-gray-500 italic">No summary available</p>
+            <p className="text-gray-500 italic">{pending ? "Summary will appear here once processing finishes." : "No summary available"}</p>
           )}
         </div>
 
@@ -313,7 +356,7 @@ export default function MeetingDetailPage() {
               {meeting.transcript}
             </div>
           ) : (
-            <p className="text-gray-500 italic">No transcript available</p>
+            <p className="text-gray-500 italic">{pending ? "Transcript will appear here once processing finishes." : "No transcript available"}</p>
           )}
         </div>
       </div>
@@ -325,6 +368,7 @@ export default function MeetingDetailPage() {
         onConfirm={handleDelete}
         filename={meeting.filename}
         isDeleting={isDeleting}
+        error={deleteError}
       />
     </div>
   );
