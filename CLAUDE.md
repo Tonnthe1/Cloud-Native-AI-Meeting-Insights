@@ -4,73 +4,47 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a cloud-native AI meeting insights application with a FastAPI backend and planned frontend. The project is containerized and designed for cloud deployment.
+Cloud-native AI meeting insights: upload a meeting recording, get a transcript (faster-whisper), summary (OpenAI, with an extractive fallback) and keywords. FastAPI API + Redis-queued worker + Next.js frontend, with Docker Compose for local use and Terraform/Kubernetes configs for AWS EKS.
 
 ## Architecture
 
-- **Backend**: FastAPI application (`backend/app/main.py`) with Python 3.11
-- **Frontend**: Directory exists but currently empty
-- **Infrastructure**: Directory exists for deployment configs
-- **Containerization**: Docker setup for the backend service
+- **API** (`backend/app/main.py`): uploads, meeting CRUD/search, job queueing. Processes synchronously when the worker is disabled (`USE_WORKER_SERVICE=false`) or Redis is unreachable.
+- **Worker** (`backend/app/worker.py`, run with `python -m app.worker`): pops jobs from Redis, runs the pipeline, retries up to 3 times, serves `/health` on port 8001 from the same process.
+- **Pipeline** (`backend/app/processing.py`): shared by API and worker. faster-whisper decodes audio itself via PyAV (no ffmpeg step); the model loads lazily.
+- **Meeting status** (`backend/app/models.py`): `queued` → `processing` → `completed`/`failed` (+ `error_message`). The frontend polls this instead of job IDs.
+- **Cache** (`backend/app/cache.py`): read-through Redis cache for `/meetings` and `/search`, invalidated by bumping a generation counter (works from the worker's sync client too). All endpoints work without Redis.
+- **DB**: PostgreSQL via sync SQLAlchemy. Schema changes go in `backend/app/migrations/NNN_*.sql` (applied at API startup, Postgres only); also update `models.py` so `create_all` matches for fresh DBs.
+- **Frontend** (`frontend/`): Next.js 15 App Router + Tailwind v4. API client in `src/lib/api.ts` (`NEXT_PUBLIC_API_URL` is baked in at build time).
+- **Infra**: `docker-compose.yml` (Ray/Triton demo services are behind `--profile extras`), `infra/terraform`, `infra/k8s`.
 
 ## Development Commands
 
-### Backend Development
-
 ```bash
-# Navigate to backend directory
+# Backend
 cd backend
-
-# Create and activate virtual environment
-python -m venv .venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
-
-# Install dependencies
-pip install -r requirements.txt
-
-# Run development server (with auto-reload)
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements-dev.txt
 uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+python -m app.worker
 
-# Or use the provided start script
-./start.sh
+# Backend checks (tests use SQLite + fakeredis; no services needed)
+flake8 .
+pytest
+
+# Frontend
+cd frontend
+npm ci
+npm run dev
+npm run lint && npm run build   # build fails on lint/type errors
+
+# Everything via Docker
+cp .env.example .env
+docker compose up --build
 ```
 
-### Docker Commands
+## Notes
 
-```bash
-# Build backend container
-cd backend
-docker build -t ai-meeting-insights .
-
-# Run container
-docker run -p 8000:8000 ai-meeting-insights
-```
-
-## Key Technical Details
-
-- **FastAPI App**: Located at `backend/app/main.py`
-- **Dependencies**: Standard FastAPI stack with uvicorn, pydantic, and development tools
-- **Port**: Backend runs on port 8000
-- **Health Check**: Available at `/health` endpoint
-- **API Documentation**: Available at `/docs` (Swagger UI) and `/redoc` when running
-
-## Project Structure
-
-```
-├── backend/           # FastAPI backend service
-│   ├── app/
-│   │   └── main.py   # Main FastAPI application
-│   ├── Dockerfile    # Container definition
-│   ├── requirements.txt
-│   └── start.sh      # Development start script
-├── frontend/         # Frontend (placeholder)
-├── infra/           # Infrastructure configs
-└── LICENSE
-```
-
-## Development Notes
-
-- The project uses Python 3.11 for the backend
-- FastAPI provides automatic API documentation
-- Virtual environment is expected to be created in `backend/.venv`
-- The start script assumes virtual environment activation
+- Python 3.11 backend; flake8 (79-char lines) runs in CI.
+- API docs at `/docs` and `/redoc`; health check at `/health`.
+- The root `.gitignore` has broad patterns (`*key*`, `*token*`, `*secret*`, `*password*`); avoid those substrings in new filenames or they won't be committed.
+- Keep `ALLOWED_AUDIO_EXTENSIONS` (backend `main.py`) and `AUDIO_EXTENSIONS` (frontend `src/lib/format.ts`) in sync.

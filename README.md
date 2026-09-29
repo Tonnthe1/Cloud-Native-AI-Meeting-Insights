@@ -21,10 +21,10 @@ A production-ready, **cloud-native** meeting assistant powered by **React/Next.j
 - **Cache/Queue** (Redis) - Job queuing and background processing
 
 **Processing Pipeline:**
-1. Upload audio → API saves file and queues job
-2. Worker picks up job → Transcribes with faster-whisper
-3. Worker generates summary → Updates database
-4. Frontend polls for results → Displays insights
+1. Upload audio → API validates and saves the file, creates a `queued` meeting, and queues a job
+2. Worker picks up job → marks the meeting `processing` → transcribes with faster-whisper
+3. Worker generates summary and keywords → marks the meeting `completed` (or `failed`, with the error, after 3 attempts)
+4. Frontend polls the meeting's status → displays insights as soon as they're ready
 
 ---
 
@@ -36,8 +36,9 @@ A production-ready, **cloud-native** meeting assistant powered by **React/Next.j
 - High-accuracy speech-to-text with faster-whisper
 
 🧠 **AI-Powered Summarization**
-- GPT-generated meeting summaries
+- GPT-generated meeting summaries (model configurable via `OPENAI_MODEL`)
 - Action items and key decisions extraction
+- Works without an OpenAI key: falls back to an extractive summary of the key sentences
 - Keyword identification and tagging
 
 🚀 **Async Processing & Scaling**
@@ -78,20 +79,29 @@ POSTGRES_USER=meetinguser
 POSTGRES_PASSWORD=yourpassword
 POSTGRES_DB=meeting_insights
 
-# OpenAI API (for summaries)
+# OpenAI API (for summaries; leave empty for extractive summaries)
 OPENAI_API_KEY=your_openai_api_key
+OPENAI_MODEL=gpt-4o-mini
 
-# Optional: API security
-API_KEY=your_optional_api_key
+# Optional: API security. When set, also set NEXT_PUBLIC_API_KEY to the same
+# value so the web UI can call the API.
+# API_KEY=your_optional_api_key
 
-# Model configuration
+# Model configuration (".en" models are English-only; use e.g. "base" for
+# other languages)
 FW_MODEL=base.en
 FW_COMPUTE_TYPE=float32
 ```
 
+See [`.env.example`](.env.example) for all options (upload size limit, CORS
+origins, frontend API URL, ...).
+
 #### Step 3: Start All Services
 ```bash
 docker compose up --build
+
+# Optional: also start the Ray Serve and Triton demo services (large images)
+docker compose --profile extras up --build
 ```
 
 **Local Access Points:**
@@ -280,9 +290,14 @@ GET /job-status/{job_id}
 Returns: {"status": "processing|completed|failed", "result": {...}}
 ```
 
+Every meeting has a `status` (`queued`, `processing`, `completed` or
+`failed`, with `error_message` set on failure), so clients can poll
+`GET /meetings/{id}` instead of tracking job IDs. Uploads are limited to audio
+files up to `MAX_UPLOAD_MB` (default 200 MB).
+
 **Meeting Management**
 ```http
-GET /meetings                    # List all meetings
+GET /meetings?limit=100&offset=0 # List meetings, newest first
 GET /meetings/{id}              # Get meeting details
 DELETE /meetings/{id}           # Delete meeting
 GET /search?q=keyword           # Search meetings
@@ -337,8 +352,8 @@ cd backend
 pip install -r requirements.txt
 uvicorn app.main:app --reload --port 8000
 
-# Run worker service locally  
-python app/worker.py
+# Run worker service locally (serves its health check on :8001)
+python -m app.worker
 
 # Run frontend locally
 cd frontend
@@ -346,12 +361,20 @@ npm install
 npm run dev
 ```
 
-**Production Deployment:**
+**Running Tests:**
 ```bash
-# Build optimized containers
-docker compose -f docker-compose.prod.yml up -d
+cd backend
+pip install -r requirements-dev.txt
+flake8 .
+pytest          # uses SQLite and an in-memory Redis; no services needed
 
-# Scale workers horizontally
+cd ../frontend
+npm run lint
+npm run build
+```
+
+**Scaling Workers:**
+```bash
 docker compose up --scale backend-worker=3
 ```
 

@@ -35,6 +35,8 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
+    # Source is mounted below, so reload on changes during development.
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
     depends_on:
       db:
         condition: service_healthy
@@ -52,6 +54,7 @@ services:
       REDIS_PORT: 6379
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       USE_WORKER_SERVICE: "true"
+      UPLOAD_DIR: /app/uploads
     ports:
       - "8000:8000"
     volumes:
@@ -79,26 +82,30 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       FW_MODEL: ${FW_MODEL:-base.en}
       FW_COMPUTE_TYPE: ${FW_COMPUTE_TYPE:-float32}
+      UPLOAD_DIR: /app/uploads
+    restart: unless-stopped
     ports:
       - "8001:8001"
     volumes:
+      # The worker only reads uploads (the API writes them).
       - ./backend/uploads:/app/uploads:ro
 
   frontend:
     build:
       context: ./frontend
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+        NEXT_PUBLIC_API_KEY: ${NEXT_PUBLIC_API_KEY:-}
     depends_on:
       - backend-api
-    environment:
-      NEXT_PUBLIC_API_URL: http://localhost:8000
     ports:
       - "3000:3000"
-    volumes:
-      - ./frontend:/app
-      - /app/node_modules
 
+  # Optional demo services (large images); start them with
+  # `docker compose --profile extras up`.
   ray-head:
     image: rayproject/ray:2.8.0-py310
+    profiles: ["extras"]
     command: ray start --head --dashboard-host=0.0.0.0 --dashboard-port=8265 --node-ip-address=0.0.0.0
     ports:
       - "8265:8265"  # Ray dashboard
@@ -115,6 +122,7 @@ services:
 
   triton-server:
     image: nvcr.io/nvidia/tritonserver:23.08-py3
+    profiles: ["extras"]
     command: tritonserver --model-repository=/models --http-port=8000 --grpc-port=8001 --metrics-port=8002 --log-verbose=1
     ports:
       - "8003:8000"  # HTTP inference API
